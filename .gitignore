@@ -1,0 +1,22 @@
+# Zig build artifacts (Zig 0.16 uses the dot-prefixed cache dirs)
+zig-out/
+.zig-cache/
+.zig-cache-*/
+
+# Lua build artifacts (libs/lua-5.4 is vendored in M1)
+libs/lua-5.4/src/*.o
+libs/lua-5.4/src/*.a
+libs/lua-5.4/src/lua
+libs/lua-5.4/src/luac
+
+# WebAssembly demo output (B3, M5)
+docs/demo/*.wasm
+docs/demo/*.js
+
+# Bare-metal images (B4, M12)
+images/*.iso
+images/*.bin
+
+# Recorded GIFs are committed; their raw captures are not (tools/record-gif.sh)
+*.mp4
+*.raw.gif
