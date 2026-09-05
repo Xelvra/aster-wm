@@ -81,7 +81,7 @@ its neighbours, and a crashing app closes its own window rather than the desktop
 
 | Backend | Loop | Notes |
 |---|---|---|
-| SDL2 | own `while` loop | reference implementation, the one CI runs |
+| SDL3 | own `while` loop | reference implementation, the one CI runs (ADR-009) |
 | DRM/KMS + evdev | own loop, page flip | needs seatd/libseat and VT handling |
 | WebAssembly | `requestAnimationFrame` | the reason the loop is inverted |
 | bare metal | own loop, `hlt` when idle | no `spawn`; the same `wm.lua` still runs |

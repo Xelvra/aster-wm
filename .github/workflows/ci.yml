@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, wip]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      SDL_VERSION: "3.4.16"
+      LIBRARY_PATH: /usr/local/lib
+      CPATH: /usr/local/include
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installed by hand rather than via a third-party action: pins the
+      # exact toolchain build.zig itself requires and puts `zig` on PATH
+      # for every later step without depending on that action's own
+      # PATH/post-job behavior.
+      - name: Install Zig
+        run: |
+          ZIG_VERSION=$(cat .zig-version)
+          curl -fsSL -o zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          sudo tar -C /usr/local -xJf zig.tar.xz
+          sudo ln -sf "/usr/local/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
+
+      # ADR-009: this project targets SDL3, not the distro's SDL2 (or
+      # sdl2-compat shim over SDL3, which has its own bugs — see B5 in
+      # spec/troubleshooting.md). Ubuntu 24.04 doesn't package libsdl3-dev,
+      # so build it from the pinned upstream release instead of relying on
+      # whatever happens to be in apt.
+      - name: Cache SDL3 build
+        id: sdl3-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/include/SDL3
+            /usr/local/lib/libSDL3*
+            /usr/local/lib/cmake/SDL3
+            /usr/local/lib/pkgconfig/sdl3.pc
+          key: sdl3-${{ runner.os }}-${{ env.SDL_VERSION }}
+
+      # Verified against a plain (non-runner) ubuntu:24.04 in Docker: SDL3's
+      # CMake configure fails on this dependency specifically
+      # ("Couldn't find dependency package for XTEST") if it's missing.
+      # Installed unconditionally, not only on a cache miss, since apt is
+      # fast and a partial cache restore shouldn't skip it.
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev \
+            libxtst-dev libgl1-mesa-dev libdrm-dev libgbm-dev libudev-dev \
+            libdbus-1-dev libpipewire-0.3-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libibus-1.0-dev
+
+      - name: Build and install SDL3
+        if: steps.sdl3-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o sdl3.tar.gz \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
+          tar xzf sdl3.tar.gz
+          cmake -S "SDL3-${SDL_VERSION}" -B sdl3-build -DCMAKE_BUILD_TYPE=Release -DSDL_STATIC=OFF
+          cmake --build sdl3-build -j"$(nproc)"
+          sudo cmake --install sdl3-build
+
+      - name: Refresh linker cache
+        run: sudo ldconfig
+
+      - name: zig build
+        run: zig build
+
+      # Runnable-commit (spec/troubleshooting.md's parent rules): a build
+      # that compiles but can't run headless isn't good enough to merge.
+      - name: aster runs headless
+        run: timeout 2 env SDL_VIDEODRIVER=dummy ./zig-out/bin/aster || [ $? -eq 124 ]
+
+      # Unit tests + the core line budget (tools/budget.sh) + the full
+      # host-contract conformance suite — all three are wired into this one
+      # command by build.zig, so CI can't drift from what a contributor runs
+      # locally.
+      - name: zig build test
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: zig build test

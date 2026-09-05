@@ -100,7 +100,7 @@ the only boundary in the whole system — Lua never touches anything below it.
 
 | Backend | What it gets you |
 |---|---|
-| **SDL2** | a window on Linux, macOS, or Windows |
+| **SDL3** | a window on Linux, macOS, or Windows |
 | **DRM/KMS + evdev** | *is* your desktop — boots straight to it, no X, no Wayland |
 | **WebAssembly** | the live demo above, in any browser |
 | **Bare metal** | boots on real hardware from a Limine ISO, no OS underneath |
