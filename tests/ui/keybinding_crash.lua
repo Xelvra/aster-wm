@@ -1,7 +1,8 @@
 -- tests/ui/keybinding_crash.lua — a keybinding is config code, not an app,
--- but it must not be able to take the whole desktop down either: spec
--- §7.2's crash-isolation promise ("a bug in wm.lua/an app never bears down
--- the desktop") has to cover Super+whatever, the same as draw()/tick().
+-- but it must not be able to take the whole desktop down either:
+-- spec/architecture.md's "Windows and apps" crash-isolation promise ("a
+-- crashing app closes its own window rather than the desktop") has to
+-- cover Super+whatever, the same as draw()/tick().
 --
 -- Without this, `wm:bind("super+x", function() error("boom") end)` throws
 -- all the way out of aster.frame(), which src/main.zig calls via `try` —

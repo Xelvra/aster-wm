@@ -1,4 +1,4 @@
--- tests/ui/crash_isolation.lua — spec/architecture.md §7.2: an app that
+-- tests/ui/crash_isolation.lua — spec/architecture.md's "Windows and apps": an app that
 -- throws from draw() or tick() closes only its own window, is logged, and
 -- never takes the rest of the desktop down.
 

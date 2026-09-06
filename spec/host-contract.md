@@ -94,7 +94,18 @@ host.wait(timeout_ms) -> Event | nil
 ```
 
 Blocks for at most `timeout_ms`. `host.wait(0)` is a non-blocking poll and is the only form
-`aster.frame()` uses.
+`aster.frame()` uses. `nil` must mean the queue is truly empty — never "the next item is an
+event type this backend doesn't have a mapping for" (see B3 in `troubleshooting.md`): a
+backend's `wait()` must loop internally past anything it can't translate, rather than
+returning `nil` for it and silently dropping later, real events for up to a frame.
+
+Conformance-only builds (`caps.inject = true`) additionally expose `host._inject(event)`,
+which queues a synthetic event as if it came from the real input source, so
+`spec/conformance/04_events.lua` and `07_resize.lua` can drive the event-shape and
+resize-notification guarantees above without real hardware. It is not part of the contract
+any real build ships, and its exact queuing mechanism is a backend's own choice (see
+ADR-009 for why the sdl backend uses an internal ring buffer rather than routing through
+SDL's own event queue).
 
 ```lua
 {type="key_down",   key="a", mods={ctrl=true, alt=false, shift=false, super=false}}
@@ -116,8 +127,10 @@ from the other. Key names are listed in `spec/keys.md` and that list is normativ
 Keyboard layout (including switching between layouts) is the host's job. There is no
 contract call for it.
 
-On `focus` with `focused=false`, Lua clears its modifier state; a backend should send this
-whenever the user leaves the window mid-chord.
+Lua holds no modifier state of its own to clear on focus loss — every `key_down`/`key_up`
+event already carries the full modifier set for that event. A backend must still send `focus`
+with `focused=false` whenever the user leaves the window mid-chord, so Lua-side code that
+*does* track a chord in progress (a keybinding matcher, say) has a signal to reset on.
 
 ## Filesystem
 
@@ -132,6 +145,8 @@ Entry = { name = "wm.lua", dir = false, size = 1234, mtime = 1756890000 }
 - `mtime` is Unix seconds. It exists so the desktop can notice that `wm.lua` was edited by
   an external editor and offer to reload.
 - `host.rename` onto an existing path returns `nil, "exists"`.
+- `host.remove` is **recursive**: removing a directory removes its entire contents, not just
+  an empty one. Removing a path that doesn't exist returns `nil, "not_found"`.
 
 ## Time
 

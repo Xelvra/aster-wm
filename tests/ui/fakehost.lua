@@ -14,6 +14,12 @@ local M = {}
 local fs = {} -- path -> { data = string, mtime = number }
 local mtime_clock = 0
 
+-- path -> error string: makes host.read(path) fail with something other
+-- than "not_found" (permission, io, busy, invalid), the way a real
+-- filesystem can even when the file exists — see B14 in troubleshooting.md.
+local read_errors = {}
+function M._set_read_error(path, err) read_errors[path] = err end
+
 local function next_mtime()
   mtime_clock = mtime_clock + 1
   return mtime_clock
@@ -82,9 +88,17 @@ end
 
 M.log_lines = {}
 
+-- A distinct metatable marks a value as "actually came from host.surface()",
+-- as opposed to any other table (a window, an app) that an app might pass
+-- by mistake. The real backend distinguishes a surface by Lua type
+-- (LUA_TLIGHTUSERDATA vs. everything else, src/host/bindings.zig's
+-- surfaceArg) — a plain `{}` here can't reproduce that distinction, since
+-- both a surface and a window are ordinary tables in this fake.
+local SURFACE_MT = {}
+
 _G.host = {
   info = function() return info end,
-  surface = function() return {} end, -- opaque; tests/ui/ never draws pixels
+  surface = function() return setmetatable({}, SURFACE_MT) end, -- opaque; tests/ui/ never draws pixels
   present = function() end,
   wait = function(_timeout_ms)
     return table.remove(events, 1)
@@ -95,6 +109,7 @@ _G.host = {
     return clock_value
   end,
   read = function(path)
+    if read_errors[path] then return nil, read_errors[path] end
     local entry = fs[path]
     if not entry then return nil, "not_found" end
     return entry.data
@@ -154,10 +169,31 @@ _G.host = {
 -- and only blow up against the real backend. Drawing itself stays a no-op
 -- — tests/ui/ never checks pixels — only argument shape is validated.
 
-local function checknum(name, argn, v)
-  if type(v) ~= "number" then
-    error("bad argument #" .. argn .. " to '" .. name .. "' (number expected, got " .. type(v) .. ")", 3)
+-- Ranges mirror src/host/bindings.zig's checkI32/checkU32 (see B17 in
+-- spec/troubleshooting.md): x/y are i32, everything else __native_render
+-- takes (w, h, thickness, radius, codepoint/row, color) is u32.
+local I32_MIN, I32_MAX = -2147483648, 2147483647
+local U32_MAX = 4294967295
+
+-- Counts UTF-8 codepoints, not bytes: the real renderer (src/render/renderer.zig's
+-- textWidth) advances one glyph per codepoint, so a multi-byte character
+-- must count once here too, not once per byte.
+local function utf8_len(s)
+  local n, i = 0, 1
+  while i <= #s do
+    local b = s:byte(i)
+    if b >= 0xf0 then
+      i = i + 4
+    elseif b >= 0xe0 then
+      i = i + 3
+    elseif b >= 0xc0 then
+      i = i + 2
+    else
+      i = i + 1
+    end
+    n = n + 1
   end
+  return n
 end
 
 local function checkstr(name, argn, v)
@@ -166,51 +202,76 @@ local function checkstr(name, argn, v)
   end
 end
 
+local function checksurface(name, argn, v)
+  if type(v) ~= "table" or getmetatable(v) ~= SURFACE_MT then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (surface expected, got " .. type(v) .. ")", 3)
+  end
+end
+
+local function checki32(name, argn, v)
+  if type(v) ~= "number" or v % 1 ~= 0 or v < I32_MIN or v > I32_MAX then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (value does not fit in a 32-bit coordinate)", 3)
+  end
+end
+
+local function checku32(name, argn, v)
+  if type(v) ~= "number" or v % 1 ~= 0 or v < 0 or v > U32_MAX then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (value does not fit in an unsigned 32-bit size)", 3)
+  end
+end
+
 _G.__native_render = {
   fill_rect = function(s, x, y, w, h, color)
-    checknum("fill_rect", 2, x); checknum("fill_rect", 3, y)
-    checknum("fill_rect", 4, w); checknum("fill_rect", 5, h)
-    checknum("fill_rect", 6, color)
+    checksurface("fill_rect", 1, s)
+    checki32("fill_rect", 2, x); checki32("fill_rect", 3, y)
+    checku32("fill_rect", 4, w); checku32("fill_rect", 5, h)
+    checku32("fill_rect", 6, color)
   end,
   round_rect = function(s, x, y, w, h, r, color)
-    checknum("round_rect", 2, x); checknum("round_rect", 3, y)
-    checknum("round_rect", 4, w); checknum("round_rect", 5, h)
-    checknum("round_rect", 6, r); checknum("round_rect", 7, color)
+    checksurface("round_rect", 1, s)
+    checki32("round_rect", 2, x); checki32("round_rect", 3, y)
+    checku32("round_rect", 4, w); checku32("round_rect", 5, h)
+    checku32("round_rect", 6, r); checku32("round_rect", 7, color)
   end,
   rect_border = function(s, x, y, w, h, thickness, color)
-    checknum("rect_border", 2, x); checknum("rect_border", 3, y)
-    checknum("rect_border", 4, w); checknum("rect_border", 5, h)
-    checknum("rect_border", 6, thickness); checknum("rect_border", 7, color)
+    checksurface("rect_border", 1, s)
+    checki32("rect_border", 2, x); checki32("rect_border", 3, y)
+    checku32("rect_border", 4, w); checku32("rect_border", 5, h)
+    checku32("rect_border", 6, thickness); checku32("rect_border", 7, color)
   end,
   gradient_border = function(s, x, y, w, h, thickness, color1, color2)
-    checknum("gradient_border", 2, x); checknum("gradient_border", 3, y)
-    checknum("gradient_border", 4, w); checknum("gradient_border", 5, h)
-    checknum("gradient_border", 6, thickness)
-    checknum("gradient_border", 7, color1); checknum("gradient_border", 8, color2)
+    checksurface("gradient_border", 1, s)
+    checki32("gradient_border", 2, x); checki32("gradient_border", 3, y)
+    checku32("gradient_border", 4, w); checku32("gradient_border", 5, h)
+    checku32("gradient_border", 6, thickness)
+    checku32("gradient_border", 7, color1); checku32("gradient_border", 8, color2)
   end,
   blit = function(s, src, x, y)
-    if type(src) ~= "table" then
-      error("bad argument #2 to 'blit' (surface expected, got " .. type(src) .. ")", 2)
-    end
-    checknum("blit", 3, x); checknum("blit", 4, y)
+    checksurface("blit", 1, s)
+    checksurface("blit", 2, src)
+    checki32("blit", 3, x); checki32("blit", 4, y)
   end,
   glyph = function(s, x, y, row, color)
-    checknum("glyph", 2, x); checknum("glyph", 3, y)
-    checknum("glyph", 4, row); checknum("glyph", 5, color)
+    checksurface("glyph", 1, s)
+    checki32("glyph", 2, x); checki32("glyph", 3, y)
+    checku32("glyph", 4, row); checku32("glyph", 5, color)
   end,
   text = function(s, x, y, str, color)
-    checknum("text", 2, x); checknum("text", 3, y)
-    checkstr("text", 4, str); checknum("text", 5, color)
+    checksurface("text", 1, s)
+    checki32("text", 2, x); checki32("text", 3, y)
+    checkstr("text", 4, str); checku32("text", 5, color)
   end,
-  text_width = function(str) checkstr("text_width", 1, str); return #str * 8 end,
+  text_width = function(str) checkstr("text_width", 1, str); return utf8_len(str) * 8 end,
   line_height = function() return 16 end,
   push_clip = function(s, x, y, w, h)
-    checknum("push_clip", 2, x); checknum("push_clip", 3, y)
-    checknum("push_clip", 4, w); checknum("push_clip", 5, h)
+    checksurface("push_clip", 1, s)
+    checki32("push_clip", 2, x); checki32("push_clip", 3, y)
+    checku32("push_clip", 4, w); checku32("push_clip", 5, h)
   end,
-  pop_clip = function() end,
+  pop_clip = function(s) checksurface("pop_clip", 1, s) end,
   get_pixel = function(s, x, y)
-    checknum("get_pixel", 2, x); checknum("get_pixel", 3, y)
+    checksurface("get_pixel", 1, s)
+    checki32("get_pixel", 2, x); checki32("get_pixel", 3, y)
     return 0
   end,
 }

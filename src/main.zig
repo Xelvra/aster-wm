@@ -2,10 +2,18 @@ const std = @import("std");
 const lua = @import("host/lua.zig");
 const fs = @import("host/fs.zig");
 const sdl_backend = @import("backends/sdl/backend.zig");
+const renderer = @import("render/renderer.zig");
 
 test {
     std.testing.refAllDecls(@import("render/renderer.zig"));
+    std.testing.refAllDecls(@import("render/ttf.zig"));
+    std.testing.refAllDecls(@import("render/font.zig"));
     _ = @import("host/bindings.zig");
+    // pub fn main() is never called by a test build (the test runner
+    // supplies its own entry point), so anything only reachable from
+    // main()'s body — like constructing sdl_backend.Sdl — is otherwise
+    // never analyzed and its test blocks never discovered.
+    _ = @import("backends/sdl/backend.zig");
 }
 
 // The "Juicy Main" entry point (Zig 0.16's Io interface): the application
@@ -13,6 +21,8 @@ test {
 // in should construct its own std.Io.Threaded or DebugAllocator.
 pub fn main(init: std.process.Init) !void {
     fs.setIo(init.io);
+    renderer.initFont(init.gpa);
+    defer renderer.deinitFont();
 
     var sdl = try sdl_backend.Sdl.init(init.gpa, init.environ_map, "aster", 1024, 768);
     defer sdl.deinit();
@@ -31,6 +41,15 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try state.boot();
+    // Deferred, not a plain call after the loop: the contract says
+    // "aster.shutdown() — once, before the process exits", and a `try
+    // state.frame(...)` returning an error below would otherwise skip a
+    // plain trailing call entirely.
+    defer state.shutdown() catch |err| {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "aster.shutdown() failed: {s}", .{@errorName(err)}) catch "aster.shutdown() failed";
+        fs.log(msg);
+    };
 
     var buf: [16]u8 = undefined;
     while (true) {
@@ -43,6 +62,4 @@ pub fn main(init: std.process.Init) !void {
         // even with no input.
         if (std.mem.eql(u8, status, "idle")) sdl.idleWait(1000);
     }
-
-    try state.shutdown();
 }

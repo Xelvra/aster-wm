@@ -1,7 +1,11 @@
 //! Backend-agnostic pieces of the host contract (spec/host-contract.md):
-//! event/info shapes, and the vtable a backend implements. Filesystem, clock
-//! and log are the same on every backend and live in fs.zig; info/surface/
-//! present/wait are backend-specific and live under src/backends/*.
+//! event/info shapes, and the vtable a backend implements. Filesystem and
+//! log are the same on every backend and live in fs.zig; info/surface/
+//! present/wait/clock are backend-specific and live under src/backends/*
+//! (ADR-010: whether a backend has a real-time clock at all is its own
+//! decision, not something fs.zig can answer for all of them — fs.zig's
+//! realClock() is a shared helper a backend's clockFn can call, not a
+//! substitute for one).
 
 const Surface = @import("../render/surface.zig").Surface;
 
@@ -86,6 +90,11 @@ pub const Backend = struct {
     surfaceFn: *const fn (ptr: *anyopaque) *Surface,
     presentFn: *const fn (ptr: *anyopaque) void,
     waitFn: *const fn (ptr: *anyopaque, timeout_ms: i32) ?Event,
+    /// null means "no real-time clock" (spec/host-contract.md "Time": must
+    /// agree with `info().caps.clock`, checked by spec/conformance/05_time.lua)
+    /// — a per-backend decision, not something fs.zig's shared helper can
+    /// make on every backend's behalf (see B15 in troubleshooting.md).
+    clockFn: *const fn (ptr: *anyopaque) ?Clock,
     /// caps.inject only: host._inject(event), spec/conformance/ 04_events.lua
     /// and 07_resize.lua. Only set when build.zig's `conformance` build
     /// option is on (the `aster-conformance` binary) — a release build of
@@ -103,6 +112,9 @@ pub const Backend = struct {
     }
     pub fn wait(self: Backend, timeout_ms: i32) ?Event {
         return self.waitFn(self.ptr, timeout_ms);
+    }
+    pub fn clock(self: Backend) ?Clock {
+        return self.clockFn(self.ptr);
     }
     pub fn inject(self: Backend, ev: Event) bool {
         const f = self.injectFn orelse return false;

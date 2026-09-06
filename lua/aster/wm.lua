@@ -1,15 +1,15 @@
--- lua/aster/wm.lua — windows, ids, focus. Tiling/workspaces land later
--- (ASTER-WM.md §12 B.4); this milestone gives every window a stable
--- integer id (spec/architecture.md "Windows and apps") instead of the old
--- dispatch-by-title.
+-- lua/aster/wm.lua — windows, ids, focus. Every window has a stable
+-- integer id (spec/architecture.md "Windows and apps"); tiling/workspaces
+-- are not implemented yet — every window is floating, and `wm:open` never
+-- sets `ws`.
 
 local M = {}
 local aster = require("aster")
 
-function M.default_draw_frame(self, win)
+function M.default_draw_frame(self, win, surface)
   local r = require("aster.render")
   local color = win.focused and (self.theme.accent or 0xff5544) or (self.theme.inactive or 0x3b4248)
-  r.rect_border(self.surface, win.x, win.y, win.w, win.h, self.border, color)
+  r.rect_border(surface, win.x, win.y, win.w, win.h, self.border, color)
 end
 
 -- adopt(opts): first call creates the singleton wm and stores it in
@@ -106,9 +106,9 @@ function M:focus_window(win)
 end
 
 -- Calls an app callback under pcall. An app that throws closes its own
--- window and logs — it never takes the desktop down with it (spec
--- §7.2: "Appka, která spadne, zavře své okno a zaloguje; nebere s sebou
--- desktop."). Returns what pcall returns: ok, and fn's result on success.
+-- window and logs — it never takes the desktop down with it
+-- (spec/architecture.md "Windows and apps"). Returns what pcall returns:
+-- ok, and fn's result on success.
 function M:guard(win, fn, ...)
   local ok, result = pcall(fn, ...)
   if not ok then
@@ -119,36 +119,68 @@ function M:guard(win, fn, ...)
   return true, result
 end
 
--- Calls self:draw_frame(win) under pcall, separately from guard(): a crash
--- here is the config's fault, not the app's, so it must not close the
--- window — instead fall back to the built-in frame for good and keep
--- going (see B7).
-function M:render_frame(win)
-  local ok, err = pcall(self.draw_frame, self, win)
+-- Calls self:draw_frame(win, surface) under pcall, separately from guard():
+-- a crash here is the config's fault, not the app's, so it must not close
+-- the window — instead fall back to the built-in frame for good and keep
+-- going (see B7). Takes `surface` as an argument, the same way app.draw
+-- does, rather than reading it off `self` — one calling convention for
+-- both kinds of draw callback.
+function M:render_frame(win, surface)
+  local ok, err = pcall(self.draw_frame, self, win, surface)
   if not ok then
     aster.log("wm.lua draw_frame crashed: " .. tostring(err) .. " — falling back to the built-in frame")
     self.draw_frame = M.default_draw_frame
-    pcall(self.draw_frame, self, win)
+    pcall(self.draw_frame, self, win, surface)
   end
 end
 
 local BUBBLE_MAX_WIDTH = 480
 local BUBBLE_MAX_LINES = 6
 
--- Breaks `text` into lines no wider than `max_w`, greedily packing words;
--- a single word wider than `max_w` on its own (no spaces to break on) is
--- hard-split by character instead of overrunning it.
+-- Iterates `s` one UTF-8 codepoint (as a Lua byte-substring) at a time, so
+-- callers never have to slice mid-sequence.
+local function each_codepoint(s)
+  local i = 1
+  return function()
+    if i > #s then return nil end
+    local b = s:byte(i)
+    local len = 1
+    if b >= 0xf0 then
+      len = 4
+    elseif b >= 0xe0 then
+      len = 3
+    elseif b >= 0xc0 then
+      len = 2
+    end
+    local cp = s:sub(i, i + len - 1)
+    i = i + len
+    return cp
+  end
+end
+
+-- Breaks `text` into lines no wider than `max_w`, greedily packing words; a
+-- single word wider than `max_w` on its own (no spaces to break on) is
+-- hard-split instead of overrunning it, on a codepoint boundary (never
+-- mid-UTF-8-sequence, which would draw as U+FFFD) and in one linear pass
+-- per split (not re-measuring the accumulated prefix from scratch on every
+-- codepoint, which is what made this quadratic in word length — see B22 in
+-- spec/troubleshooting.md).
 local function wrap_line(r, text, max_w)
   if r.text_width(text) <= max_w then return { text } end
   local lines, cur = {}, ""
   for word in text:gmatch("%S+") do
     while r.text_width(word) > max_w do
-      local i = 1
-      while i <= #word and r.text_width(word:sub(1, i)) <= max_w do i = i + 1 end
-      i = math.max(i - 1, 1)
+      local piece, width = "", 0
+      for cp in each_codepoint(word) do
+        local cpw = r.text_width(cp)
+        if width + cpw > max_w and piece ~= "" then break end
+        piece = piece .. cp
+        width = width + cpw
+      end
+      if piece == "" then piece = word:sub(1, 1) end -- one codepoint alone already overruns max_w; take it anyway so progress is guaranteed
       if cur ~= "" then lines[#lines + 1] = cur; cur = "" end
-      lines[#lines + 1] = word:sub(1, i)
-      word = word:sub(i + 1)
+      lines[#lines + 1] = piece
+      word = word:sub(#piece + 1)
     end
     local candidate = cur == "" and word or (cur .. " " .. word)
     if r.text_width(candidate) <= max_w then
@@ -200,10 +232,9 @@ local function render_error_bubble(surface, out, bubble)
 end
 
 function M:render(surface)
-  self.surface = surface
   local r = require("aster.render")
   local state = aster.state
-  local out = aster.info.outputs[1]
+  local out = state.info.outputs[1]
 
   r.fill_rect(surface, 0, 0, out.w, out.h, self.theme.background or 0x111111)
 
@@ -225,7 +256,7 @@ function M:render(surface)
     -- drawn after the app's content so the frame stays visible on top —
     -- unless guard() just closed this window, in which case there's
     -- nothing left to frame.
-    if not crashed then self:render_frame(win) end
+    if not crashed then self:render_frame(win, surface) end
   end
 
   if state.error_bubble then
@@ -233,8 +264,9 @@ function M:render(surface)
   end
 end
 
--- Calls win.app.tick(win, now_ms) for every window (spec §7.2, the
--- optional fourth app callback); a truthy return marks the frame dirty.
+-- Calls win.app.tick(win, now_ms) for every window (spec/architecture.md
+-- "Windows and apps", the optional fourth app callback); a truthy return
+-- marks the frame dirty.
 function M:tick(now_ms)
   local state = aster.state
   for _, win in pairs(state.windows) do

@@ -47,7 +47,9 @@ pub const State = struct {
         c.lua_close(self.L);
     }
 
-    fn callGlobalFunction(self: *State, path: []const u8, args: u8) !void {
+    // Calls a global Lua function by dotted path (e.g. "aster.boot") with
+    // no arguments — the only shape either caller below needs.
+    fn callGlobalFunction(self: *State, path: []const u8) !void {
         // path like "aster.boot": require("aster") then index .boot
         var it = std.mem.splitScalar(u8, path, '.');
         const first = it.first();
@@ -63,9 +65,7 @@ pub const State = struct {
             _ = c.lua_getfield(self.L, -1, z.ptr);
             c.lua_remove(self.L, -2);
         }
-        // move the function below its args
-        if (args > 0) c.lua_insert(self.L, -1 - @as(c_int, args));
-        if (c.lua_pcallk(self.L, args, 0, 0, 0, null) != c.LUA_OK) {
+        if (c.lua_pcallk(self.L, 0, 0, 0, 0, null) != c.LUA_OK) {
             self.reportError();
             return error.LuaError;
         }
@@ -78,7 +78,7 @@ pub const State = struct {
     }
 
     pub fn boot(self: *State) !void {
-        try self.callGlobalFunction("aster.boot", 0);
+        try self.callGlobalFunction("aster.boot");
     }
 
     /// Loads and runs a Lua file directly against the real host.* table —
@@ -86,10 +86,10 @@ pub const State = struct {
     /// never go through aster.boot()/the config loader. There's no `os`
     /// library compiled in (see build.zig), so a script that needs a
     /// backend capability it doesn't have signals that by erroring with a
-    /// message starting "SKIP:" (spec/host-contract.md §9.4: a test a
-    /// backend genuinely can't run becomes a manual release-checklist
-    /// step, never a silent pass). Returns a process exit code: 0 on
-    /// success, 1 on a real failure, 2 on a declared skip.
+    /// message starting "SKIP:" (spec/architecture.md's "Backends"
+    /// section: a test a backend genuinely can't run becomes a manual
+    /// release-checklist step, never a silent pass). Returns a process
+    /// exit code: 0 on success, 1 on a real failure, 2 on a declared skip.
     pub fn runScript(self: *State, path: []const u8) !u8 {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const z = std.fmt.bufPrintZ(&buf, "{s}", .{path}) catch return 1;
@@ -112,7 +112,7 @@ pub const State = struct {
     }
 
     pub fn shutdown(self: *State) !void {
-        try self.callGlobalFunction("aster.shutdown", 0);
+        try self.callGlobalFunction("aster.shutdown");
     }
 
     /// Returns the "running" | "idle" | "quit" string frame() returned.
@@ -131,8 +131,16 @@ pub const State = struct {
         }
         var len: usize = 0;
         const s = c.lua_tolstring(self.L, -1, &len);
+        // loop.frame() always returns one of "running"/"idle"/"quit", so
+        // this is unreachable today — checked anyway, since this was the
+        // one place in this file reading a Lua return value without a
+        // type check (compare reportError, runScript above).
+        const str = s orelse {
+            c.lua_pop(self.L, 1);
+            return error.LuaError;
+        };
         const n = @min(len, buf.len - 1);
-        @memcpy(buf[0..n], s[0..n]);
+        @memcpy(buf[0..n], str[0..n]);
         buf[n] = 0;
         c.lua_pop(self.L, 1);
         return buf[0..n];

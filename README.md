@@ -14,12 +14,6 @@ windows still open.
 <br>
 
 <div align="center">
-  <img src="docs/media/live-edit.gif" width="720" alt="Editing wm.lua and watching the desktop repaint live">
-</div>
-
-<br>
-
-<div align="center">
 
 **[Try it in your browser →](https://xelvra.github.io/aster-wm)** — no install, runs in a
 `<canvas>`, same code as everywhere else.
@@ -33,7 +27,8 @@ windows still open.
 Grab a binary from [Releases](https://github.com/Xelvra/aster-wm/releases) — Linux, macOS,
 Windows.
 
-Building from source:
+Building from source needs a system install of **SDL3** (`zig build`) and **Lua 5.4**
+(`lua5.4`, for `zig build test`'s `tests/ui/` suite):
 
 ```bash
 git clone https://github.com/Xelvra/aster-wm
@@ -56,9 +51,9 @@ because that lives one floor down, in a language you can't see into.
 Not a layer above it. Not a set of options it reads. The file itself.
 
 ```lua
-function wm:draw_frame(win)
+function wm:draw_frame(win, surface)
   local c = win.focused and self.theme.accent or self.theme.inactive
-  aster.render.round_rect(self.surface, win.x, win.y, win.w, win.h, 8, c)
+  aster.render.round_rect(surface, win.x, win.y, win.w, win.h, 8, c)
 end
 ```
 
@@ -66,10 +61,6 @@ Change that function, hit `Ctrl+S`, and every window on screen redraws — right
 restart, no relog, no recompile. **Your windows stay open and keep their contents.** A typo
 doesn't cost you anything either: if the file doesn't compile, the previous version keeps
 running and you get told which line is wrong.
-
-<div align="center">
-  <img src="docs/media/rewrite-frame.gif" width="720" alt="Rewriting draw_frame from square borders to rounded gradient borders live, windows untouched">
-</div>
 
 <br>
 
@@ -132,7 +123,6 @@ focus, all of it is composed in Lua, on top.
 
 The way in is Lua, not Zig.
 
-- **[`themes/`](themes/)** — four examples, a fifth is a five-minute PR
 - **[`apps/`](apps/)** — an app is a table with a `draw` function;
   [`hello-window.lua`](apps/hello-window.lua) is 30 lines
 - **[`good-first-issue`](https://github.com/Xelvra/aster-wm/labels/good-first-issue)**
@@ -164,10 +154,6 @@ interesting part, so the kernel became backend #4 instead of the foundation.
 <br>
 
 ## And yes, it boots without an OS at all
-
-<div align="center">
-  <img src="docs/media/bare-metal.gif" width="720" alt="QEMU booting straight from an ISO into the desktop, no Linux underneath">
-</div>
 
 <br>
 

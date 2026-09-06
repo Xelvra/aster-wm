@@ -1,4 +1,4 @@
--- tests/ui/reload_rollback_failure.lua — ADR-003 §6.4's last safety net:
+-- tests/ui/reload_rollback_failure.lua — ADR-003's reload protocol, last safety net:
 -- if even re-running the last known-good source fails, fall back to the
 -- built-in default rather than a blank screen.
 --

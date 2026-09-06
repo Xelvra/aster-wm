@@ -1,4 +1,5 @@
--- tests/ui/reload_mtime_watch.lua — spec §6.5 point 3: an external editor
+-- tests/ui/reload_mtime_watch.lua — ADR-003/architecture.md "Reload preserves
+-- state": an external editor
 -- saving wm.lua must be picked up within one poll, including an edit made
 -- before this process ever got to run its first poll (loop.lua primes the
 -- mtime baseline at boot, from aster.boot(), precisely so that edit isn't

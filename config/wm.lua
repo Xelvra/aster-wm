@@ -26,9 +26,9 @@ wm.theme = {
 
 -- Want a different frame? Rewrite this. Super+Shift+R. Done — with your
 -- windows still open, still holding whatever was in them.
-function wm:draw_frame(win)
+function wm:draw_frame(win, surface)
   local c = win.focused and self.theme.accent or self.theme.inactive
-  aster.render.rect_border(self.surface, win.x, win.y, win.w, win.h, self.border, c)
+  aster.render.rect_border(surface, win.x, win.y, win.w, win.h, self.border, c)
 end
 
 local hello = require("apps.hello-window")

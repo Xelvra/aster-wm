@@ -72,10 +72,19 @@ last safety net. The desktop is never left blank. See
 `wm.keybindings` entirely (`lua/aster/input.lua`), so they work even with a broken or empty
 config.
 
+The external-edit watch polls `wm.lua`'s mtime, which `host-contract.md` defines in whole
+Unix seconds — two saves inside the same second are indistinguishable, so the second one is
+only picked up once a third change (or the next second boundary) produces a different mtime.
+If `wm.lua` is deleted while the desktop is running, the watch notices the mtime disappear
+but does not itself trigger a reload or fall back to the built-in default — the last
+successfully loaded config keeps running untouched until the file reappears or a manual
+reload is triggered.
+
 ## Windows and apps
 
 A window has an integer `id`. The title is just an attribute — it can change, and two
-windows can share one.
+windows can share one. Workspaces are not implemented yet: every window is floating, and
+`wm:open` never assigns a workspace.
 
 An app is a table with a `draw` function and optional `key`, `text` and `tick` callbacks.
 The core never knows the name of any app, including the ones shipped in this repo; the
@@ -85,7 +94,19 @@ its neighbours, and a crashing app closes its own window rather than the desktop
 
 Global keybindings are always checked before `app.key` — a window manager binding like
 `super+q` must work even inside a buggy or malicious app, the same way i3/sway/awesome grab
-their own shortcuts first. `app.key`'s return value is not consumed by anything.
+their own shortcuts first. `app.key`'s return value is not consumed by anything. `app.key`
+only ever fires for `key_down`; the contract's `key_up` and `scroll` events reach
+`lua/aster/input.lua` but are not currently routed to any app.
+
+## Typography
+
+Text is drawn with a bundled TrueType font (`assets/font.ttf`, `@embedFile`-d, never read
+through `host.read`), rasterized and cached by codepoint in `src/render/font.zig` — Lua never
+sees a glyph bitmap, only `r.text`/`r.text_width`/`r.line_height`. `@embedFile` makes a
+missing font a build error, not a runtime state; if the *bundled* font fails to parse, the
+built-in bitmap font (`font_data.zig`) takes over instead and `host.log` says why — a font
+problem degrades the desktop, it never stops it from booting. See
+[ADR-006](adr/006-ttf-rasterizer-bitmap-fallback.md).
 
 ## Backends
 
@@ -98,7 +119,17 @@ their own shortcuts first. `app.key`'s return value is not consumed by anything.
 
 A backend is done when it passes `spec/conformance/`. Capabilities it genuinely lacks are
 declared in `host.info().caps` and return `"unsupported"` — the desktop adapts (the bar
-shows uptime instead of a clock) rather than breaking.
+shows uptime instead of a clock) rather than breaking. A conformance script that needs a
+capability the backend under test doesn't have signals that by erroring with a message
+starting `"SKIP:"`, which `aster-conformance` reports as a declared skip (exit code 2), not a
+pass — a capability a backend genuinely can't run becomes a manual release-checklist item,
+never something that silently looks green.
+
+The two-binary split (`aster`, and `aster-conformance` built with `build_options.conformance`
+so it alone exposes `host._inject`) keeps that test-only surface out of every real build.
+`__native_render.get_pixel` is a second, always-present test hook, unrelated to the
+conformance-only split — it exists purely so `spec/conformance/02_surface.lua` can read back a
+pixel it just wrote; no app or theme needs it, and none should use it.
 
 ## What is deliberately absent
 

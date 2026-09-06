@@ -14,9 +14,9 @@ says.
 ## Zig
 
 - One backend, one file under `src/backends/<name>/`. It implements the
-  `info`/`surface`/`present`/`wait` quartet from [`host-contract.md`](host-contract.md);
-  filesystem, clock and log are shared (`src/host/fs.zig`) and every backend gets them for
-  free.
+  `info`/`surface`/`present`/`wait`/`clock` quintet from [`host-contract.md`](host-contract.md)
+  (ADR-010: a backend's notion of wall-clock time, if any, is its own decision); filesystem
+  and log are shared (`src/host/fs.zig`) and every backend gets them for free.
 - `bindings.zig` naming: `l`-prefixed functions (`lWait`, `lInfo`, …) are the twelve
   `host.*` contract functions; `n`-prefixed functions (`nFillRect`, `nBlit`, …) are
   `__native_render`, the renderer library, which is not part of the contract.
@@ -49,4 +49,8 @@ says.
 
 - English only: code, comments, identifiers, commit messages. No exceptions.
 - No defensive code against inputs that can't occur — `host.*` and `aster.*` are a closed,
-  twelve-function contract; trust the shapes it defines.
+  twelve-function contract; trust the shapes it defines. This does **not** extend to
+  `__native_render`: unlike `host.*`/`aster.*`, which is Zig calling Zig, `__native_render`
+  is called directly by arbitrary app Lua, so "an input that can't occur" doesn't exist
+  there. Every argument it takes must be validated and turned into a real Lua error
+  (`luaL_argerror`) on failure, never a Zig panic — see B17 in `troubleshooting.md`.

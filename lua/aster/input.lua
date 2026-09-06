@@ -1,11 +1,11 @@
--- lua/aster/input.lua — events to actions. The launcher and key-repeat land
--- with bar.lua/launcher.lua in a later pass; this milestone routes key_down
--- through the keybinding table, then to the focused window, text to the
--- focused window only (spec/host-contract.md keeps key and text as two
--- separate events on purpose), and mouse to window focus/raise/drag.
--- There is no per-app mouse callback yet — apps only get draw/key/text/tick
--- (spec/architecture.md "Windows and apps") — so a click that isn't on a
--- window's border frame just focuses it.
+-- lua/aster/input.lua — events to actions. Routes key_down through the
+-- keybinding table, then to the focused window; text to the focused window
+-- only (spec/host-contract.md keeps key and text as two separate events on
+-- purpose); mouse to window focus/raise/drag. There is no per-app mouse
+-- callback yet — apps only get draw/key/text/tick (spec/architecture.md
+-- "Windows and apps") — so a click that isn't on a window's border frame
+-- just focuses it. key_up and scroll events are received but not yet
+-- routed anywhere; an app never sees them.
 
 local M = {}
 local aster = require("aster")
@@ -22,7 +22,7 @@ local KNOWN_MODS = { ctrl = true, alt = true, shift = true, super = true }
 -- Returns nil, err if a part before the last isn't one of KNOWN_MODS, so a
 -- typo (e.g. "shft+q") fails loudly at bind time instead of silently
 -- registering as if the modifier had never been there.
-function M.parse_spec(spec)
+local function parse_spec_uncached(spec)
   local parts = {}
   for part in spec:gmatch("[^+]+") do parts[#parts + 1] = part end
   local want = { ctrl = false, alt = false, shift = false, super = false }
@@ -35,6 +35,29 @@ function M.parse_spec(spec)
     want[mod] = true
   end
   return key, want
+end
+
+-- parse_spec is pure in `spec` alone, but dispatch() calls it once per
+-- registered binding on every single key_down — memoized so a keypress
+-- costs a table lookup per binding, not a full re-parse of its spec string.
+local parse_cache = {}
+
+function M.parse_spec(spec)
+  local cached = parse_cache[spec]
+  if not cached then
+    cached = { parse_spec_uncached(spec) }
+    parse_cache[spec] = cached
+  end
+  return cached[1], cached[2]
+end
+
+-- ADR-003 says a reload resets the keybinding table; this cache is a
+-- pure-function memoization of a config's spec strings, so a stale entry
+-- can never be *wrong* — but a config that generates spec strings
+-- programmatically (e.g. from user config data) would otherwise grow this
+-- table across every reload, unbounded. Called from aster.reload().
+function M.reset_parse_cache()
+  parse_cache = {}
 end
 
 -- Compares an event's mods against a parsed `want` table. A missing key in
@@ -55,9 +78,11 @@ function M.dispatch(e)
 
   if e.type == "key_down" then
     -- Two global bindings that bypass wm.keybindings entirely, so they
-    -- work even with a broken or empty config (spec §6.5/§6.6): the
-    -- explicit reload shortcut, and Escape dismissing the error bubble.
-    if e.key == "r" and e.mods.super and e.mods.shift then
+    -- work even with a broken or empty config (ADR-003): the explicit
+    -- reload shortcut, and Escape dismissing the error bubble. Matched via
+    -- mods_match, same as any user keybinding, so Ctrl+Super+Shift+R does
+    -- NOT also trigger this (and remains available to bind separately).
+    if e.key == "r" and mods_match(e.mods, { ctrl = false, alt = false, shift = true, super = true }) then
       aster.reload()
       aster.mark_dirty()
       return

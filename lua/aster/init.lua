@@ -60,7 +60,7 @@ function M.clear_error()
   M.state.error_bubble = nil
 end
 
--- Re-runs the last known-good source (ADR-003 §6.4 step 4's rollback).
+-- Re-runs the last known-good source (ADR-003's reload protocol: rollback).
 -- Returns true only if that source both ran clean AND returned the
 -- adopted wm — the same bar a fresh reload has to clear.
 local function try_rollback()
@@ -75,7 +75,8 @@ end
 -- of this function), so it's still the old good source for a rollback to
 -- read from if `pcall(chunk)` throws or the result fails verification.
 function M.reload()
-  local path = M.info.paths.config .. "/wm.lua"
+  M.input.reset_parse_cache()
+  local path = M.state.info.paths.config .. "/wm.lua"
   local src, err = host.read(path)
 
   if not src then
@@ -84,7 +85,17 @@ function M.reload()
       if not M.state.wm then builtin_default() end
       M.log("no config, using built-in defaults")
     else
+      -- Anything other than "not_found" (permission, io, busy, invalid — see
+      -- B14) must be treated exactly like a compile/runtime error: on first
+      -- boot M.state.wm is still nil, and loop.lua's M:render() is not
+      -- guarded against that the way M:tick() is.
       M.log("reload: " .. path .. ": " .. tostring(err))
+      if M.state.wm then
+        M.set_error("wm.lua: " .. tostring(err), "keeping previous config — desktop untouched")
+      else
+        builtin_default()
+        M.set_error("wm.lua: " .. tostring(err) .. " — running built-in defaults")
+      end
     end
     M.mark_dirty()
     return
@@ -101,9 +112,11 @@ function M.reload()
 
   -- Step 5, "verify": a config that never calls aster.wm.adopt() (or
   -- returns something else) hasn't actually reset itself into the
-  -- singleton — treat it exactly like a runtime error, below.
+  -- singleton — treat it exactly like a runtime error, below. See B16 in
+  -- spec/troubleshooting.md for why `result == nil` must be checked
+  -- separately from `result ~= M.state.wm`.
   local ok, result = pcall(chunk)
-  if ok and result ~= M.state.wm then
+  if ok and (result == nil or result ~= M.state.wm) then
     ok = false
     result = "wm.lua must call aster.wm.adopt() and return its result"
   end

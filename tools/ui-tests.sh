@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs tests/ui/*.lua against tests/ui/fakehost.lua under a plain host Lua
 # 5.4 interpreter — no graphics, no real backend. This is the other half of
-# spec/architecture.md's two-suite split (§9.1): spec/conformance/ tests a
+# spec/architecture.md's "Backends" section: spec/conformance/ tests a
 # BACKEND against the contract; tests/ui/ tests the Lua modules themselves
 # (windows, apps, reload) against a fake host, so it runs in a fraction of
 # a second and needs nothing built.

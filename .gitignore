@@ -9,11 +9,11 @@ libs/lua-5.4/src/*.a
 libs/lua-5.4/src/lua
 libs/lua-5.4/src/luac
 
-# WebAssembly demo output (B3, M5)
+# WebAssembly demo output (wasm backend, M5)
 docs/demo/*.wasm
 docs/demo/*.js
 
-# Bare-metal images (B4, M12)
+# Bare-metal images (baremetal backend, M12)
 images/*.iso
 images/*.bin
 

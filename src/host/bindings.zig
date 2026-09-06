@@ -1,7 +1,8 @@
 //! Registers the `host` table (twelve functions, spec/host-contract.md) and
 //! a separate, undocumented `__native_render` table that only
 //! lua/aster/render.lua touches — the renderer is a shared Zig library
-//! (spec/architecture.md §4.1), not part of the host contract itself.
+//! (spec/architecture.md's "Four rules", rule 3), not part of the host
+//! contract itself.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -29,9 +30,39 @@ fn checkString(L: *c.lua_State, idx: c_int) []const u8 {
     return p[0..len];
 }
 
+// __native_render is the one boundary where "the input can't occur" does
+// not hold (spec/code-style.md): unlike host.*/aster.*, which is Zig
+// calling Zig, this is called directly by arbitrary app Lua. A wrong or
+// missing argument here must become a Lua error that `pcall`/`wm:guard`
+// can catch and turn into a closed window, never a Zig panic that takes
+// the whole process down with it — see B17 in spec/troubleshooting.md.
 fn surfaceArg(L: *c.lua_State, idx: c_int) *Surface {
+    if (c.lua_type(L, idx) != c.LUA_TLIGHTUSERDATA) {
+        _ = c.luaL_argerror(L, idx, "expected a surface (as returned by host.surface())");
+        unreachable;
+    }
     const p = c.lua_touserdata(L, idx);
     return @ptrCast(@alignCast(p));
+}
+
+// Bounds-checked replacements for `@intCast(luaL_checkinteger(...))` — see
+// B17 in spec/troubleshooting.md.
+fn checkI32(L: *c.lua_State, idx: c_int) i32 {
+    const v = c.luaL_checkinteger(L, idx);
+    if (v < std.math.minInt(i32) or v > std.math.maxInt(i32)) {
+        _ = c.luaL_argerror(L, idx, "value does not fit in a 32-bit coordinate");
+        unreachable;
+    }
+    return @intCast(v);
+}
+
+fn checkU32(L: *c.lua_State, idx: c_int) u32 {
+    const v = c.luaL_checkinteger(L, idx);
+    if (v < 0 or v > std.math.maxInt(u32)) {
+        _ = c.luaL_argerror(L, idx, "value does not fit in an unsigned 32-bit size");
+        unreachable;
+    }
+    return @intCast(v);
 }
 
 // ---- host.* -----------------------------------------------------------
@@ -42,9 +73,9 @@ fn lInfo(L: ?*c.lua_State) callconv(.c) c_int {
 
     c.lua_createtable(st, 0, 6);
 
-    _ = c.lua_pushstring(st, info.backend.ptr);
+    _ = c.lua_pushlstring(st, info.backend.ptr, info.backend.len);
     c.lua_setfield(st, -2, "backend");
-    _ = c.lua_pushstring(st, info.format.ptr);
+    _ = c.lua_pushlstring(st, info.format.ptr, info.format.len);
     c.lua_setfield(st, -2, "format");
     c.lua_pushinteger(st, @intCast(info.pitch));
     c.lua_setfield(st, -2, "pitch");
@@ -71,11 +102,11 @@ fn lInfo(L: ?*c.lua_State) callconv(.c) c_int {
     c.lua_setfield(st, -2, "outputs");
 
     c.lua_createtable(st, 0, 3);
-    _ = c.lua_pushstring(st, info.paths.config.ptr);
+    _ = c.lua_pushlstring(st, info.paths.config.ptr, info.paths.config.len);
     c.lua_setfield(st, -2, "config");
-    _ = c.lua_pushstring(st, info.paths.data.ptr);
+    _ = c.lua_pushlstring(st, info.paths.data.ptr, info.paths.data.len);
     c.lua_setfield(st, -2, "data");
-    _ = c.lua_pushstring(st, info.paths.home.ptr);
+    _ = c.lua_pushlstring(st, info.paths.home.ptr, info.paths.home.len);
     c.lua_setfield(st, -2, "home");
     c.lua_setfield(st, -2, "paths");
 
@@ -230,7 +261,7 @@ fn lNowMs(L: ?*c.lua_State) callconv(.c) c_int {
 
 fn lClock(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
-    const cl = fs.clock();
+    const cl = active_backend.clock() orelse return pushError(st, error.Unsupported);
     c.lua_createtable(st, 0, 2);
     c.lua_pushnumber(st, @floatFromInt(cl.unix_ms));
     c.lua_setfield(st, -2, "unix_ms");
@@ -305,7 +336,8 @@ fn lLog(L: ?*c.lua_State) callconv(.c) c_int {
     return 0;
 }
 
-// ---- host._inject (conformance builds only, spec/host-contract.md §9.4) --
+// ---- host._inject (conformance builds only — see host-contract.md's
+// "Events" section for what this is and why) -----------------------------
 // Everything below this line is compiled out of `aster` (only
 // `aster-conformance` gets it, see build.zig's two-executable split):
 // `register` never calls `lua_setfield(..., "_inject")` unless
@@ -413,34 +445,34 @@ fn lInject(L: ?*c.lua_State) callconv(.c) c_int {
 // ---- native render (not part of the host contract) ---------------------
 
 fn colorArg(L: *c.lua_State, idx: c_int) u32 {
-    return @intCast(c.luaL_checkinteger(L, idx));
+    return checkU32(L, idx);
 }
 
 fn nFillRect(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.fillRect(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)), @intCast(c.luaL_checkinteger(st, 5)), colorArg(st, 6));
+    renderer.fillRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), colorArg(st, 6));
     return 0;
 }
 
 fn nRoundRect(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.roundRect(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)), @intCast(c.luaL_checkinteger(st, 5)), @intCast(c.luaL_checkinteger(st, 6)), colorArg(st, 7));
+    renderer.roundRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7));
     return 0;
 }
 
 fn nRectBorder(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.rectBorder(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)), @intCast(c.luaL_checkinteger(st, 5)), @intCast(c.luaL_checkinteger(st, 6)), colorArg(st, 7));
+    renderer.rectBorder(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7));
     return 0;
 }
 
 fn nGradientBorder(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.gradientBorder(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)), @intCast(c.luaL_checkinteger(st, 5)), @intCast(c.luaL_checkinteger(st, 6)), colorArg(st, 7), colorArg(st, 8));
+    renderer.gradientBorder(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7), colorArg(st, 8));
     return 0;
 }
 
@@ -448,14 +480,14 @@ fn nBlit(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
     const src = surfaceArg(st, 2);
-    renderer.blit(s, src, @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)));
+    renderer.blit(s, src, checkI32(st, 3), checkI32(st, 4));
     return 0;
 }
 
 fn nGlyph(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.drawGlyphRow(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), @intCast(c.luaL_checkinteger(st, 4)), colorArg(st, 5));
+    renderer.drawGlyphRow(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), colorArg(st, 5));
     return 0;
 }
 
@@ -463,7 +495,7 @@ fn nText(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
     const text = checkString(st, 4);
-    renderer.drawText(s, @intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)), text, colorArg(st, 5));
+    renderer.drawText(s, checkI32(st, 2), checkI32(st, 3), text, colorArg(st, 5));
     return 0;
 }
 
@@ -484,10 +516,10 @@ fn nPushClip(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
     s.pushClip(.{
-        .x = @intCast(c.luaL_checkinteger(st, 2)),
-        .y = @intCast(c.luaL_checkinteger(st, 3)),
-        .w = @intCast(c.luaL_checkinteger(st, 4)),
-        .h = @intCast(c.luaL_checkinteger(st, 5)),
+        .x = checkI32(st, 2),
+        .y = checkI32(st, 3),
+        .w = checkU32(st, 4),
+        .h = checkU32(st, 5),
     });
     return 0;
 }
@@ -504,7 +536,7 @@ fn nPopClip(L: ?*c.lua_State) callconv(.c) c_int {
 fn nGetPixel(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    const color = s.getPixel(@intCast(c.luaL_checkinteger(st, 2)), @intCast(c.luaL_checkinteger(st, 3)));
+    const color = s.getPixel(checkI32(st, 2), checkI32(st, 3));
     c.lua_pushinteger(st, @intCast(color & 0x00ffffff));
     return 1;
 }

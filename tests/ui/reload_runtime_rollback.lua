@@ -1,4 +1,4 @@
--- tests/ui/reload_runtime_rollback.lua — ADR-003 §6.4 step 4: a config
+-- tests/ui/reload_runtime_rollback.lua — ADR-003's reload protocol, rollback step: a config
 -- that compiles but throws (or fails verification by not returning the
 -- adopted wm) must roll back to the last known-good source, not just
 -- leave the singleton half-configured.

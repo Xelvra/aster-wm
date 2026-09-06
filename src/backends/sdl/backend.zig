@@ -1,6 +1,6 @@
-//! Backend B1 (spec ASTER-WM.md §A.1): a window on Linux, macOS or Windows.
-//! Implements the host.info/surface/present/wait quartet; read/write/list/
-//! remove/rename/now_ms/clock/log are shared (src/host/fs.zig).
+//! The `sdl` backend: a window on Linux, macOS or Windows. Implements the
+//! host.info/surface/present/wait/clock quintet; read/write/list/remove/
+//! rename/now_ms/log are shared (src/host/fs.zig).
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -9,6 +9,7 @@ pub const c = @cImport({
 });
 const host_mod = @import("../../host/host.zig");
 const surface_mod = @import("../../render/surface.zig");
+const fs = @import("../../host/fs.zig");
 const Surface = surface_mod.Surface;
 
 pub const Sdl = struct {
@@ -109,6 +110,14 @@ pub const Sdl = struct {
         return &self.surface;
     }
 
+    // SDL always runs under a host OS with a real-time clock — matches
+    // info()'s `caps.clock = true` above, per spec/host-contract.md's "the
+    // two must agree".
+    pub fn clock(ptr: *anyopaque) ?host_mod.Clock {
+        _ = ptr;
+        return fs.realClock();
+    }
+
     pub fn present(ptr: *anyopaque) void {
         const self: *Sdl = @ptrCast(@alignCast(ptr));
         const window_surface = c.SDL_GetWindowSurface(self.window);
@@ -118,36 +127,79 @@ pub const Sdl = struct {
 
     fn mapScancode(sc: c.SDL_Scancode) ?[:0]const u8 {
         return switch (sc) {
-            c.SDL_SCANCODE_A => "a", c.SDL_SCANCODE_B => "b", c.SDL_SCANCODE_C => "c",
-            c.SDL_SCANCODE_D => "d", c.SDL_SCANCODE_E => "e", c.SDL_SCANCODE_F => "f",
-            c.SDL_SCANCODE_G => "g", c.SDL_SCANCODE_H => "h", c.SDL_SCANCODE_I => "i",
-            c.SDL_SCANCODE_J => "j", c.SDL_SCANCODE_K => "k", c.SDL_SCANCODE_L => "l",
-            c.SDL_SCANCODE_M => "m", c.SDL_SCANCODE_N => "n", c.SDL_SCANCODE_O => "o",
-            c.SDL_SCANCODE_P => "p", c.SDL_SCANCODE_Q => "q", c.SDL_SCANCODE_R => "r",
-            c.SDL_SCANCODE_S => "s", c.SDL_SCANCODE_T => "t", c.SDL_SCANCODE_U => "u",
-            c.SDL_SCANCODE_V => "v", c.SDL_SCANCODE_W => "w", c.SDL_SCANCODE_X => "x",
-            c.SDL_SCANCODE_Y => "y", c.SDL_SCANCODE_Z => "z",
-            c.SDL_SCANCODE_0 => "0", c.SDL_SCANCODE_1 => "1", c.SDL_SCANCODE_2 => "2",
-            c.SDL_SCANCODE_3 => "3", c.SDL_SCANCODE_4 => "4", c.SDL_SCANCODE_5 => "5",
-            c.SDL_SCANCODE_6 => "6", c.SDL_SCANCODE_7 => "7", c.SDL_SCANCODE_8 => "8",
+            c.SDL_SCANCODE_A => "a",
+            c.SDL_SCANCODE_B => "b",
+            c.SDL_SCANCODE_C => "c",
+            c.SDL_SCANCODE_D => "d",
+            c.SDL_SCANCODE_E => "e",
+            c.SDL_SCANCODE_F => "f",
+            c.SDL_SCANCODE_G => "g",
+            c.SDL_SCANCODE_H => "h",
+            c.SDL_SCANCODE_I => "i",
+            c.SDL_SCANCODE_J => "j",
+            c.SDL_SCANCODE_K => "k",
+            c.SDL_SCANCODE_L => "l",
+            c.SDL_SCANCODE_M => "m",
+            c.SDL_SCANCODE_N => "n",
+            c.SDL_SCANCODE_O => "o",
+            c.SDL_SCANCODE_P => "p",
+            c.SDL_SCANCODE_Q => "q",
+            c.SDL_SCANCODE_R => "r",
+            c.SDL_SCANCODE_S => "s",
+            c.SDL_SCANCODE_T => "t",
+            c.SDL_SCANCODE_U => "u",
+            c.SDL_SCANCODE_V => "v",
+            c.SDL_SCANCODE_W => "w",
+            c.SDL_SCANCODE_X => "x",
+            c.SDL_SCANCODE_Y => "y",
+            c.SDL_SCANCODE_Z => "z",
+            c.SDL_SCANCODE_0 => "0",
+            c.SDL_SCANCODE_1 => "1",
+            c.SDL_SCANCODE_2 => "2",
+            c.SDL_SCANCODE_3 => "3",
+            c.SDL_SCANCODE_4 => "4",
+            c.SDL_SCANCODE_5 => "5",
+            c.SDL_SCANCODE_6 => "6",
+            c.SDL_SCANCODE_7 => "7",
+            c.SDL_SCANCODE_8 => "8",
             c.SDL_SCANCODE_9 => "9",
-            c.SDL_SCANCODE_SPACE => "space", c.SDL_SCANCODE_RETURN => "enter",
-            c.SDL_SCANCODE_ESCAPE => "escape", c.SDL_SCANCODE_TAB => "tab",
-            c.SDL_SCANCODE_BACKSPACE => "backspace", c.SDL_SCANCODE_DELETE => "delete",
+            c.SDL_SCANCODE_SPACE => "space",
+            c.SDL_SCANCODE_RETURN => "enter",
+            c.SDL_SCANCODE_ESCAPE => "escape",
+            c.SDL_SCANCODE_TAB => "tab",
+            c.SDL_SCANCODE_BACKSPACE => "backspace",
+            c.SDL_SCANCODE_DELETE => "delete",
             c.SDL_SCANCODE_INSERT => "insert",
-            c.SDL_SCANCODE_UP => "up", c.SDL_SCANCODE_DOWN => "down",
-            c.SDL_SCANCODE_LEFT => "left", c.SDL_SCANCODE_RIGHT => "right",
-            c.SDL_SCANCODE_HOME => "home", c.SDL_SCANCODE_END => "end",
-            c.SDL_SCANCODE_PAGEUP => "pageup", c.SDL_SCANCODE_PAGEDOWN => "pagedown",
-            c.SDL_SCANCODE_F1 => "f1", c.SDL_SCANCODE_F2 => "f2", c.SDL_SCANCODE_F3 => "f3",
-            c.SDL_SCANCODE_F4 => "f4", c.SDL_SCANCODE_F5 => "f5", c.SDL_SCANCODE_F6 => "f6",
-            c.SDL_SCANCODE_F7 => "f7", c.SDL_SCANCODE_F8 => "f8", c.SDL_SCANCODE_F9 => "f9",
-            c.SDL_SCANCODE_F10 => "f10", c.SDL_SCANCODE_F11 => "f11", c.SDL_SCANCODE_F12 => "f12",
-            c.SDL_SCANCODE_MINUS => "minus", c.SDL_SCANCODE_EQUALS => "equals",
-            c.SDL_SCANCODE_LEFTBRACKET => "bracketleft", c.SDL_SCANCODE_RIGHTBRACKET => "bracketright",
-            c.SDL_SCANCODE_SEMICOLON => "semicolon", c.SDL_SCANCODE_APOSTROPHE => "apostrophe",
-            c.SDL_SCANCODE_GRAVE => "grave", c.SDL_SCANCODE_BACKSLASH => "backslash",
-            c.SDL_SCANCODE_COMMA => "comma", c.SDL_SCANCODE_PERIOD => "period",
+            c.SDL_SCANCODE_UP => "up",
+            c.SDL_SCANCODE_DOWN => "down",
+            c.SDL_SCANCODE_LEFT => "left",
+            c.SDL_SCANCODE_RIGHT => "right",
+            c.SDL_SCANCODE_HOME => "home",
+            c.SDL_SCANCODE_END => "end",
+            c.SDL_SCANCODE_PAGEUP => "pageup",
+            c.SDL_SCANCODE_PAGEDOWN => "pagedown",
+            c.SDL_SCANCODE_F1 => "f1",
+            c.SDL_SCANCODE_F2 => "f2",
+            c.SDL_SCANCODE_F3 => "f3",
+            c.SDL_SCANCODE_F4 => "f4",
+            c.SDL_SCANCODE_F5 => "f5",
+            c.SDL_SCANCODE_F6 => "f6",
+            c.SDL_SCANCODE_F7 => "f7",
+            c.SDL_SCANCODE_F8 => "f8",
+            c.SDL_SCANCODE_F9 => "f9",
+            c.SDL_SCANCODE_F10 => "f10",
+            c.SDL_SCANCODE_F11 => "f11",
+            c.SDL_SCANCODE_F12 => "f12",
+            c.SDL_SCANCODE_MINUS => "minus",
+            c.SDL_SCANCODE_EQUALS => "equals",
+            c.SDL_SCANCODE_LEFTBRACKET => "bracketleft",
+            c.SDL_SCANCODE_RIGHTBRACKET => "bracketright",
+            c.SDL_SCANCODE_SEMICOLON => "semicolon",
+            c.SDL_SCANCODE_APOSTROPHE => "apostrophe",
+            c.SDL_SCANCODE_GRAVE => "grave",
+            c.SDL_SCANCODE_BACKSLASH => "backslash",
+            c.SDL_SCANCODE_COMMA => "comma",
+            c.SDL_SCANCODE_PERIOD => "period",
             c.SDL_SCANCODE_SLASH => "slash",
             else => null,
         };
@@ -170,6 +222,31 @@ pub const Sdl = struct {
         };
     }
 
+    // The largest prefix of `bytes`, at most `max_len` bytes, that ends on
+    // a complete UTF-8 codepoint boundary. A blind `@min(bytes.len,
+    // max_len)` byte truncation (SDL_EVENT_TEXT_INPUT is normally one
+    // short codepoint and never actually hits this in practice, given
+    // text_buf's size) could otherwise cut a multi-byte sequence in half.
+    fn utf8SafeLen(bytes: []const u8, max_len: usize) usize {
+        if (bytes.len <= max_len) return bytes.len;
+        if (max_len == 0) return 0;
+        var start = max_len - 1;
+        while (start > 0 and (bytes[start] & 0xc0) == 0x80) : (start -= 1) {}
+        const b = bytes[start];
+        const seq_len: usize = if (b < 0x80)
+            1
+        else if (b & 0xe0 == 0xc0)
+            2
+        else if (b & 0xf0 == 0xe0)
+            3
+        else if (b & 0xf8 == 0xf0)
+            4
+        else
+            1; // malformed lead byte; treat as one byte rather than looping forever
+        if (start + seq_len <= max_len) return max_len;
+        return start;
+    }
+
     fn translate(self: *Sdl, ev: c.SDL_Event) ?host_mod.Event {
         return switch (ev.type) {
             c.SDL_EVENT_QUIT => .{ .quit = .{} },
@@ -184,7 +261,7 @@ pub const Sdl = struct {
             },
             c.SDL_EVENT_TEXT_INPUT => blk: {
                 const text_slice: []const u8 = std.mem.sliceTo(ev.text.text, 0);
-                const n = @min(text_slice.len, self.text_buf.len);
+                const n = utf8SafeLen(text_slice, self.text_buf.len);
                 @memcpy(self.text_buf[0..n], text_slice[0..n]);
                 break :blk .{ .text = .{ .text = self.text_buf[0..n] } };
             },
@@ -258,7 +335,7 @@ pub const Sdl = struct {
         }
     }
 
-    // ---- conformance builds only (spec/host-contract.md §9.4) -----------
+    // ---- conformance builds only (host-contract.md's "Events" section) --
     //
     // Injected events go into our own small queue instead of through
     // SDL_PushEvent — see spec/troubleshooting.md B5 for why, and ADR-009.
@@ -363,7 +440,18 @@ pub const Sdl = struct {
             .surfaceFn = surfaceFn,
             .presentFn = present,
             .waitFn = wait,
+            .clockFn = clock,
             .injectFn = if (build_options.conformance) inject else null,
         };
     }
 };
+
+test "utf8SafeLen never splits a multi-byte codepoint" {
+    // "á" is 2 bytes (0xC3 0xA1); truncating to 1 byte would otherwise cut
+    // it in half.
+    try std.testing.expectEqualStrings("a", "aá"[0..Sdl.utf8SafeLen("aá", 2)]);
+    try std.testing.expectEqualStrings("aá", "aá"[0..Sdl.utf8SafeLen("aá", 3)]);
+    try std.testing.expectEqualStrings("", ""[0..Sdl.utf8SafeLen("á", 1)]);
+    try std.testing.expectEqualStrings("á", "á"[0..Sdl.utf8SafeLen("á", 2)]);
+    try std.testing.expectEqualStrings("hello", "hello"[0..Sdl.utf8SafeLen("hello", 64)]);
+}

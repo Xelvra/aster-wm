@@ -1,13 +1,13 @@
-# ADR-009 — SDL3, not SDL2, for backend B1
+# ADR-009 — SDL3, not SDL2, for the sdl backend
 
 **Status:** accepted
 
 ## Context
 
-ASTER-WM.md Section 11 A.1 named SDL2 for backend B1 (the reference
-implementation, the one CI runs per spec/architecture.md's backend table)
-without much justification beyond it being the obvious, well-worn choice at
-the time the document was written.
+The project's original design notes named SDL2 for the sdl backend (the
+reference implementation, the one CI runs per spec/architecture.md's
+backend table) without much justification beyond it being the obvious,
+well-worn choice at the time.
 
 While implementing `host._inject` (a test-only synthetic-event mechanism for
 `spec/conformance/04_events.lua` and `07_resize.lua`, contract section 9.4),
@@ -39,7 +39,7 @@ aster-wm's own event handling.
      distributions phase SDL2 into a compatibility package) is through a
      shim forwarding to SDL3 anyway. That's exactly the kind of hidden
      translation layer that can carry more bugs like this one later.
-2. **Switch to SDL3 directly for backend B1.**
+2. **Switch to SDL3 directly for the sdl backend.**
    - Pro: talks to the library that's actually present and actively
      developed, with no translation layer in between to carry bugs;
      SDL3's API is a genuine improvement (clearer boolean-return error
@@ -49,9 +49,9 @@ aster-wm's own event handling.
      — init, window/surface creation, and every event-type constant differ
      between SDL2 and SDL3; spec/architecture.md's backend table needs
      updating to match; SDL3's Emscripten/wasm support is less
-     battle-tested than SDL2's, which matters for the later B3 backend and
-     has to be re-evaluated when that milestone starts, not assumed away
-     now.
+     battle-tested than SDL2's, which matters for the future wasm backend
+     and has to be re-evaluated when that milestone starts, not assumed
+     away now.
 3. **Vendor a specific SDL2 release**, bypassing whatever "SDL2" resolves
    to at the system level. Rejected outright: it contradicts the project's
    own build promise (`zig build && zig build test` works against whatever
@@ -61,7 +61,7 @@ aster-wm's own event handling.
 
 ## Decision
 
-Backend B1 moves to **SDL3**. `src/backends/sdl/backend.zig` is rewritten
+The sdl backend moves to **SDL3**. `src/backends/sdl/backend.zig` is rewritten
 against the SDL3 API — not patched — and `spec/architecture.md`'s backend
 table is updated to say SDL3. The internal event queue built for
 `host._inject` is kept regardless of this decision: it is the right design
@@ -75,7 +75,7 @@ input at all), not merely a shim workaround that this migration makes moot.
   only has SDL2 (no SDL3, no compat shim), the build fails — a real,
   knowingly-accepted dependency shift, not a silent trap; call it out in
   README/CONTRIBUTING when those are next touched.
-- The B3 (wasm) backend's SDL story needs re-evaluating against SDL3's
+- The future wasm backend's SDL story needs re-evaluating against SDL3's
   Emscripten support specifically when that milestone starts. Flagged here
   so it is not rediscovered from scratch.
 - Every SDL call in the backend is rewritten and re-verified against

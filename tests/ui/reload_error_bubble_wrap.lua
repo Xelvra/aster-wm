@@ -43,7 +43,10 @@ render_mod.fill_rect = orig_fill
 
 assert(#texts > 1, "a 300-character message with no spaces must be wrapped across multiple lines")
 for _, t in ipairs(texts) do
-  assert(#t * 8 <= 480, "no single drawn line may be wider than the bubble's max width, got " .. #t .. " chars")
+  -- Measured through the same text_width the wrapping code itself uses
+  -- (codepoints, not bytes — see B22 in spec/troubleshooting.md), so this
+  -- stays correct if this fixture ever grows non-ASCII content.
+  assert(render_mod.text_width(t) <= 480, "no single drawn line may be wider than the bubble's max width, got " .. #t .. " chars")
 end
 assert(#texts <= 6, "the bubble must cap the number of lines it draws, got " .. #texts)
 
@@ -51,7 +54,7 @@ assert(#texts <= 6, "the bubble must cap the number of lines it draws, got " .. 
 -- so rects[#rects] is the bubble's own background box.
 local bubble = rects[#rects]
 assert(bubble.x >= 0, "the bubble must stay fully on-screen, got x=" .. bubble.x)
-assert(bubble.x + bubble.w <= aster.info.outputs[1].w,
+assert(bubble.x + bubble.w <= aster.state.info.outputs[1].w,
   "the bubble must not extend past the right edge either")
 
 print("reload_error_bubble_wrap: PASS")

@@ -5,6 +5,7 @@
 const std = @import("std");
 const surface_mod = @import("surface.zig");
 const font_data = @import("font_data.zig");
+const font = @import("font.zig");
 
 pub const Surface = surface_mod.Surface;
 pub const Rect = surface_mod.Rect;
@@ -12,17 +13,55 @@ pub const Rect = surface_mod.Rect;
 pub const glyph_width = font_data.glyph_width;
 pub const glyph_height = font_data.glyph_height;
 
+// ADR-006: called once, at boot, before any drawing. Until this runs (e.g.
+// the unit-test binary, which never calls main()), font.glyph() reports
+// "not loaded" and every text draw uses the bitmap fallback below.
+pub fn initFont(allocator: std.mem.Allocator) void {
+    font.init(allocator);
+}
+
+pub fn deinitFont() void {
+    font.deinit();
+}
+
 fn pack(color: u32) u32 {
     return color & 0x00ffffff;
 }
 
+fn blendPixel(s: *Surface, x: i32, y: i32, color: u32, coverage: u8) void {
+    if (coverage == 0) return;
+    if (coverage == 255) {
+        s.setPixel(x, y, pack(color));
+        return;
+    }
+    const bg = s.getPixel(x, y);
+    const a: u32 = coverage;
+    const inv: u32 = 255 - a;
+    const cr = (color >> 16) & 0xff;
+    const cg = (color >> 8) & 0xff;
+    const cb = color & 0xff;
+    const br = (bg >> 16) & 0xff;
+    const bgn = (bg >> 8) & 0xff;
+    const bb = bg & 0xff;
+    const r = (cr * a + br * inv) / 255;
+    const g = (cg * a + bgn * inv) / 255;
+    const b = (cb * a + bb * inv) / 255;
+    s.setPixel(x, y, (r << 16) | (g << 8) | b);
+}
+
 pub fn fillRect(s: *Surface, x: i32, y: i32, w: u32, h: u32, color: u32) void {
     const c = pack(color);
-    var row: i32 = y;
-    const y_end = y + @as(i32, @intCast(h));
+    // Clip up front rather than visiting every pixel of the requested rect
+    // and rejecting most of them one at a time in setPixel: a background
+    // fill clipped to a small window is the common case this avoids being
+    // needlessly quadratic-feeling across every window on screen.
+    const clipped = s.clip.intersect(.{ .x = x, .y = y, .w = w, .h = h });
+    if (clipped.w == 0 or clipped.h == 0) return;
+    var row: i32 = clipped.y;
+    const y_end = clipped.y + @as(i32, @intCast(clipped.h));
     while (row < y_end) : (row += 1) {
-        var col: i32 = x;
-        const x_end = x + @as(i32, @intCast(w));
+        var col: i32 = clipped.x;
+        const x_end = clipped.x + @as(i32, @intCast(clipped.w));
         while (col < x_end) : (col += 1) {
             s.setPixel(col, row, c);
         }
@@ -82,7 +121,7 @@ fn gradientOutline(s: *Surface, x: i32, y: i32, w: u32, h: u32, color_a: u32, co
 
 pub fn gradientBorder(s: *Surface, x: i32, y: i32, w: u32, h: u32, thickness: u32, color_a: u32, color_b: u32) void {
     // Nests the single-pixel gradient outline inward `thickness` times so
-    // the argument actually changes the drawn result (see B3 in
+    // the argument actually changes the drawn result (see B21 in
     // spec/troubleshooting.md).
     var t: u32 = 0;
     while (t < thickness and w > 2 * t and h > 2 * t) : (t += 1) {
@@ -119,7 +158,7 @@ pub fn blit(s: *Surface, src: *const Surface, dst_x: i32, dst_y: i32) void {
     }
 }
 
-pub fn drawGlyphRow(s: *Surface, x: i32, y: i32, codepoint: u32, color: u32) void {
+fn drawGlyphRowBitmap(s: *Surface, x: i32, y: i32, codepoint: u32, color: u32) void {
     const c = pack(color);
     const rows = font_data.glyph(codepoint);
     var row: u32 = 0;
@@ -132,6 +171,38 @@ pub fn drawGlyphRow(s: *Surface, x: i32, y: i32, codepoint: u32, color: u32) voi
             }
         }
     }
+}
+
+// Draws one codepoint with `top_y` as the top of the text line (matching
+// the bitmap font's convention, so existing call sites that pace lines by
+// lineHeight() don't need to change) and returns the pixel advance to the
+// next glyph's pen x.
+fn drawCodepoint(s: *Surface, pen_x: i32, top_y: i32, codepoint: u32, color: u32) u32 {
+    if (font.glyph(codepoint)) |g| {
+        const baseline_y = top_y + font.ascentPx();
+        var row: u32 = 0;
+        while (row < g.h) : (row += 1) {
+            var col: u32 = 0;
+            while (col < g.w) : (col += 1) {
+                const cov = g.data[row * g.w + col];
+                if (cov != 0) {
+                    blendPixel(s, pen_x + g.xoff + @as(i32, @intCast(col)), baseline_y + g.yoff + @as(i32, @intCast(row)), color, cov);
+                }
+            }
+        }
+        return @intCast(g.advance);
+    }
+    drawGlyphRowBitmap(s, pen_x, top_y, codepoint, color);
+    return glyph_width;
+}
+
+fn advanceFor(codepoint: u32) u32 {
+    if (font.glyph(codepoint)) |g| return @intCast(g.advance);
+    return glyph_width;
+}
+
+pub fn drawGlyphRow(s: *Surface, x: i32, y: i32, codepoint: u32, color: u32) void {
+    _ = drawCodepoint(s, x, y, codepoint, color);
 }
 
 fn nextCodePoint(text: []const u8, i: *usize) u32 {
@@ -177,22 +248,22 @@ pub fn drawText(s: *Surface, x: i32, y: i32, text: []const u8, color: u32) void 
     var pen_x = x;
     while (i < text.len) {
         const cp = nextCodePoint(text, &i);
-        drawGlyphRow(s, pen_x, y, cp, color);
-        pen_x += glyph_width;
+        pen_x += @as(i32, @intCast(drawCodepoint(s, pen_x, y, cp, color)));
     }
 }
 
 pub fn textWidth(text: []const u8) u32 {
     var i: usize = 0;
-    var count: u32 = 0;
+    var total: u32 = 0;
     while (i < text.len) {
-        _ = nextCodePoint(text, &i);
-        count += 1;
+        const cp = nextCodePoint(text, &i);
+        total += advanceFor(cp);
     }
-    return count * glyph_width;
+    return total;
 }
 
 pub fn lineHeight() u32 {
+    if (font.isLoaded()) return font.lineHeight();
     return glyph_height;
 }
 

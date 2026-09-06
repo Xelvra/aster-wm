@@ -1,4 +1,4 @@
--- tests/ui/reload_error_bubble.lua — ADR-003 §6.6: a failed reload shows a
+-- tests/ui/reload_error_bubble.lua — ADR-003: a failed reload shows a
 -- bubble drawn from Lua, dismissed by the next successful reload or by
 -- Escape. Covers the syntax-error path and the two ways to clear it.
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs spec/conformance/ against aster-conformance (the only build with
-# host._inject — see build.zig and spec/host-contract.md §9.4). Exit codes
+# host._inject — see spec/architecture.md's "Backends" section). Exit codes
 # per script: 0 pass, 1 fail, 2 declared skip (backend genuinely can't run
 # it — never counted as a pass).
 set -u
