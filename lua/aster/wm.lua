@@ -4,6 +4,7 @@
 -- dispatch-by-title.
 
 local M = {}
+local aster = require("aster")
 
 function M.default_draw_frame(self, win)
   local r = require("aster.render")
@@ -17,7 +18,6 @@ end
 -- overridden (spec/architecture.md "Reload preserves state").
 function M.adopt(opts)
   opts = opts or {}
-  local aster = require("aster")
   aster.state.wm = aster.state.wm or setmetatable({}, { __index = M })
   local wm = aster.state.wm
 
@@ -38,7 +38,7 @@ function M:bind(spec, fn)
   local input = require("aster.input")
   local key, err = input.parse_spec(spec)
   if not key then
-    host.log("aster: wm:bind: " .. err .. " — binding not registered")
+    aster.log("wm:bind: " .. err .. " — binding not registered")
     return
   end
   self.keybindings[spec] = fn
@@ -47,7 +47,6 @@ end
 -- The only place a window is created. Launcher, keybinding and an app
 -- itself all call this the same way — no privileged path.
 function M:open(opts)
-  local aster = require("aster")
   local state = aster.state
   local id = state.next_id
   state.next_id = id + 1
@@ -70,7 +69,6 @@ end
 
 function M:close(win)
   if not win then return end
-  local aster = require("aster")
   local state = aster.state
   state.windows[win.id] = nil
   if state.focus == win.id then
@@ -86,7 +84,6 @@ end
 
 -- Topmost window whose bounds contain (x, y), or nil.
 function M:window_at(x, y)
-  local aster = require("aster")
   local state = aster.state
   local best, best_z = nil, -1
   for _, win in pairs(state.windows) do
@@ -102,7 +99,6 @@ end
 -- Raises a window to the top of the stack and gives it focus.
 function M:focus_window(win)
   if not win then return end
-  local aster = require("aster")
   local state = aster.state
   win.z = state.next_z
   state.next_z = state.next_z + 1
@@ -116,7 +112,7 @@ end
 function M:guard(win, fn, ...)
   local ok, result = pcall(fn, ...)
   if not ok then
-    host.log("aster: app '" .. tostring(win.title) .. "' crashed: " .. tostring(result))
+    aster.log("app '" .. tostring(win.title) .. "' crashed: " .. tostring(result))
     self:close(win)
     return false
   end
@@ -130,16 +126,82 @@ end
 function M:render_frame(win)
   local ok, err = pcall(self.draw_frame, self, win)
   if not ok then
-    host.log("aster: wm.lua draw_frame crashed: " .. tostring(err) .. " — falling back to the built-in frame")
+    aster.log("wm.lua draw_frame crashed: " .. tostring(err) .. " — falling back to the built-in frame")
     self.draw_frame = M.default_draw_frame
     pcall(self.draw_frame, self, win)
+  end
+end
+
+local BUBBLE_MAX_WIDTH = 480
+local BUBBLE_MAX_LINES = 6
+
+-- Breaks `text` into lines no wider than `max_w`, greedily packing words;
+-- a single word wider than `max_w` on its own (no spaces to break on) is
+-- hard-split by character instead of overrunning it.
+local function wrap_line(r, text, max_w)
+  if r.text_width(text) <= max_w then return { text } end
+  local lines, cur = {}, ""
+  for word in text:gmatch("%S+") do
+    while r.text_width(word) > max_w do
+      local i = 1
+      while i <= #word and r.text_width(word:sub(1, i)) <= max_w do i = i + 1 end
+      i = math.max(i - 1, 1)
+      if cur ~= "" then lines[#lines + 1] = cur; cur = "" end
+      lines[#lines + 1] = word:sub(1, i)
+      word = word:sub(i + 1)
+    end
+    local candidate = cur == "" and word or (cur .. " " .. word)
+    if r.text_width(candidate) <= max_w then
+      cur = candidate
+    else
+      lines[#lines + 1] = cur
+      cur = word
+    end
+  end
+  if cur ~= "" then lines[#lines + 1] = cur end
+  return lines
+end
+
+-- ADR-003's error bubble: a bordered box in the top-right corner, drawn
+-- last so it sits above every window. Two lines for a compile/runtime
+-- error (the error itself, then "desktop untouched"); one line for the
+-- built-in-default fallback, which has no "previous config" left to name.
+-- Wrapped to a fixed max width and capped at a fixed max line count (see
+-- B11) so a long error message can't overrun the screen or the box.
+local function render_error_bubble(surface, out, bubble)
+  local r = require("aster.render")
+  local pad, margin = 12, 16
+  local lh = r.line_height()
+  local max_w = math.min(BUBBLE_MAX_WIDTH, out.w - pad * 2 - margin * 2)
+
+  local lines = {}
+  for _, raw in ipairs(bubble.line2 and { bubble.line1, bubble.line2 } or { bubble.line1 }) do
+    for _, wrapped in ipairs(wrap_line(r, raw, max_w)) do
+      lines[#lines + 1] = wrapped
+    end
+  end
+  if #lines > BUBBLE_MAX_LINES then
+    for i = #lines, BUBBLE_MAX_LINES + 1, -1 do lines[i] = nil end
+    lines[BUBBLE_MAX_LINES] = "..."
+  end
+
+  local w = 0
+  for _, line in ipairs(lines) do w = math.max(w, r.text_width(line)) end
+  w = w + pad * 2
+  local h = #lines * lh + pad * 2
+  local x = out.w - w - margin
+  local y = margin
+
+  r.fill_rect(surface, x, y, w, h, 0x2a1414)
+  r.rect_border(surface, x, y, w, h, 2, 0xcc4444)
+  for i, line in ipairs(lines) do
+    r.text(surface, x + pad, y + pad + (i - 1) * lh, line, 0xf0d0d0)
   end
 end
 
 function M:render(surface)
   self.surface = surface
   local r = require("aster.render")
-  local aster = require("aster")
   local state = aster.state
   local out = aster.info.outputs[1]
 
@@ -165,12 +227,15 @@ function M:render(surface)
     -- nothing left to frame.
     if not crashed then self:render_frame(win) end
   end
+
+  if state.error_bubble then
+    render_error_bubble(surface, out, state.error_bubble)
+  end
 end
 
 -- Calls win.app.tick(win, now_ms) for every window (spec §7.2, the
 -- optional fourth app callback); a truthy return marks the frame dirty.
 function M:tick(now_ms)
-  local aster = require("aster")
   local state = aster.state
   for _, win in pairs(state.windows) do
     if win.app and win.app.tick then

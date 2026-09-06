@@ -157,3 +157,77 @@ be wrong here, since the bug is in the config, not in the app running inside
 it. Because `draw_frame` is one function shared by every window, falling
 back permanently (rather than per-window) also avoids re-logging the same
 crash once per window per frame.
+
+## B8 — A crashing keybinding took the whole process down, not just the app
+
+**Symptom:** `wm:bind("super+x", function() error("boom") end)`, then
+pressing the bound key, crashed `aster` outright instead of leaving the
+desktop running — the same failure mode as B7, in a different call site.
+
+**Cause:** `lua/aster/input.lua`'s `dispatch()` called a matched
+keybinding's function directly (`fn()`), with no `pcall`. Every app callback
+(`draw`/`key`/`text`/`tick`) already goes through `wm:guard`, and
+`draw_frame` got its own `pcall` in B7 — but a keybinding registered via
+`wm:bind` had no safety net at all. The error propagates out of
+`dispatch()`, out of `aster.frame()`, and `src/main.zig` awaits that call
+with `try`, so an uncaught Lua error there ends the whole process.
+
+**Fix:** `dispatch()` now calls the matched keybinding under `pcall` and
+logs on failure, without closing any window — a keybinding isn't attached
+to one, unlike an app callback. Not routed through `wm:guard()` itself,
+since that helper assumes a `win` to close.
+
+## B9 — The external-edit watch could silently eat the first save
+
+**Symptom:** starting `aster`, then immediately saving `wm.lua` in an
+external editor before the watch had run once, did nothing — the edit was
+picked up only on a *second* save.
+
+**Cause:** `lua/aster/loop.lua`'s watch set its own baseline mtime lazily,
+from whatever `host.list` first reported (`aster.last_mtime =
+aster.last_mtime or e.mtime`). If that first poll happened to run after the
+file had already been edited, the edited mtime became the baseline itself,
+so the very edit that should have triggered a reload instead became "no
+change since baseline."
+
+**Fix:** the baseline is now primed once, in `aster.boot()`, from the mtime
+as it stood right after the initial config load (`loop.lua`'s
+`config_mtime()`, shared by `boot()` and the poll in `frame()`). Any edit
+made after that point — including one that lands before `frame()` has run
+even once — has a real prior value to compare against.
+
+## B10 — "running built-in defaults" didn't always mean it
+
+**Symptom:** when a config's replacement crashed AND rolling back to the
+last known-good source also failed, the error bubble said "config rollback
+failed, running built-in defaults" — but the wm singleton wasn't
+necessarily reset to the built-in theme/keybindings at all.
+
+**Cause:** `lua/aster/init.lua`'s reload protocol only called
+`builtin_default()` in that branch `if not M.state.wm`. Since
+`aster.wm.adopt()` mutates the singleton in place, `M.state.wm` is almost
+always already set by the time this branch runs — including by the failed
+config itself, partway through, before it crashed — so the fallback the
+message promised usually never ran, and whatever half-reset state the
+crashing chunk left behind kept running instead.
+
+**Fix:** call `builtin_default()` unconditionally in this branch. It's
+idempotent (`adopt()` returns the existing singleton; `wm:open` only fires
+when there are no windows yet), so this can't lose open windows — it just
+makes the safety net ADR-003 promises actually run every time.
+
+## B11 — A long error message overran the error bubble off-screen
+
+**Symptom:** a config error whose message was long (a deep stack line, a
+long path, or just a long single token with no spaces) produced a bubble
+wider than the screen, drawn starting at a negative x — mostly off the left
+edge instead of the fixed-size box `ASTER-WM.md` §6.6 shows.
+
+**Cause:** `lua/aster/wm.lua`'s `render_error_bubble` sized the box to
+whatever `text_width` returned for the raw message, with no upper bound.
+
+**Fix:** `wrap_line()` greedily wraps each bubble line to a fixed max width
+(`BUBBLE_MAX_WIDTH`), hard-splitting by character the rare single token
+that's wider than the max width on its own (no space to break on); the
+total line count is capped at `BUBBLE_MAX_LINES`, with the overflow
+collapsed to a single `"..."` line rather than growing the box further.

@@ -1,7 +1,8 @@
 -- tests/ui/reload_preserves_state.lua — ADR-003: state survives, code is
 -- replaced. Only the happy path (a config that recompiles cleanly) is
--- covered here; the rollback/verify edge cases are a separate, known-open
--- item (see drafts/M1.md N1/N2 — deliberately not touched by this suite).
+-- covered here; rollback, verify-failure and the error bubble have their
+-- own suites (reload_runtime_rollback.lua, reload_rollback_failure.lua,
+-- reload_error_bubble.lua).
 
 package.path = "lua/?.lua;lua/?/init.lua;./?.lua;./?/init.lua;" .. package.path
 local fake = require("tests.ui.fakehost")

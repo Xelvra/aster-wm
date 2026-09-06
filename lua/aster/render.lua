@@ -29,19 +29,4 @@ function M.clipped(s, x, y, w, h, fn)
   if not ok then error(err, 0) end
 end
 
--- A table of drawing functions with `s` already bound, so call sites read
--- like g.fill_rect(x, y, w, h, color) instead of repeating the surface.
-local bound_names = {
-  "fill_rect", "round_rect", "rect_border", "gradient_border", "blit", "glyph", "text",
-}
-
-function M.bind(s)
-  local g = { text_width = M.text_width, line_height = M.line_height }
-  for _, name in ipairs(bound_names) do
-    local fn = M[name]
-    g[name] = function(...) return fn(s, ...) end
-  end
-  return g
-end
-
 return M

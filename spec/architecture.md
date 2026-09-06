@@ -63,8 +63,14 @@ Window state lives in `aster.state`, which is created once at boot and never rep
 config had overridden: keybindings, drawing methods, theme, bar widgets.
 
 If the file doesn't compile, the previous version keeps running and an error bubble says
-which line is wrong. If it compiles but throws, the last known-good source is re-applied.
-The desktop is never left blank. See [ADR-003](adr/003-reload-preserves-state.md).
+which line is wrong. If it compiles but throws — or doesn't return the adopted instance —
+the last known-good source is re-applied; if that also fails, the built-in default is the
+last safety net. The desktop is never left blank. See
+[ADR-003](adr/003-reload-preserves-state.md).
+
+`Super+Shift+R` reloads and `Escape` dismisses the error bubble; both bypass
+`wm.keybindings` entirely (`lua/aster/input.lua`), so they work even with a broken or empty
+config.
 
 ## Windows and apps
 

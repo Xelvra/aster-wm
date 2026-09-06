@@ -35,7 +35,8 @@ local hello = require("apps.hello-window")
 
 wm:bind("super+q", function() wm:close(aster.state.windows[aster.state.focus]) end)
 wm:bind("super+n", function() wm:open { app = hello, title = "hello" } end)
-wm:bind("super+shift+r", aster.reload)
+-- Reload itself (Super+Shift+R) is core-level, not a binding you make here
+-- (lua/aster/input.lua) — it has to work even when this file is broken.
 
 if not next(aster.state.windows) then
   wm:open { app = hello, title = "hello" }

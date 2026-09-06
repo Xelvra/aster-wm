@@ -8,6 +8,7 @@
 -- window's border frame just focuses it.
 
 local M = {}
+local aster = require("aster")
 
 -- Set while dragging a window by its border; not part of aster.state since
 -- it's transient input state, not something a config reload should see.
@@ -49,16 +50,32 @@ local function focused_window(state)
 end
 
 function M.dispatch(e)
-  local aster = require("aster")
   local state = aster.state
   local wm = state.wm
 
   if e.type == "key_down" then
+    -- Two global bindings that bypass wm.keybindings entirely, so they
+    -- work even with a broken or empty config (spec §6.5/§6.6): the
+    -- explicit reload shortcut, and Escape dismissing the error bubble.
+    if e.key == "r" and e.mods.super and e.mods.shift then
+      aster.reload()
+      aster.mark_dirty()
+      return
+    end
+    if e.key == "escape" and state.error_bubble then
+      aster.clear_error()
+      aster.mark_dirty()
+      return
+    end
     if wm then
       for spec, fn in pairs(wm.keybindings) do
         local key, want = M.parse_spec(spec)
         if key == e.key and mods_match(e.mods, want) then
-          fn()
+          -- Not wm:guard() — there's no win to close here (see B8).
+          local ok, err = pcall(fn)
+          if not ok then
+            aster.log("keybinding '" .. spec .. "' crashed: " .. tostring(err))
+          end
           aster.mark_dirty()
           return
         end

@@ -16,6 +16,12 @@ M.frame = loop.frame
 M.shutdown = loop.shutdown
 M.mark_dirty = loop.mark_dirty
 
+-- Every log line the core emits is prefixed the same way; shared so it's
+-- spelled once instead of at each of the dozen call sites across the core.
+function M.log(msg)
+  host.log("aster: " .. msg)
+end
+
 -- The core's own bootstrap screen, drawn with the render primitives
 -- directly rather than pulled in from apps/ — ADR-007 forbids the core
 -- referencing any app by name, including the ones shipped in this repo.
@@ -43,21 +49,42 @@ local function builtin_default()
   return wm
 end
 
+-- The error bubble (ADR-003, spec/architecture.md "Reload preserves
+-- state"): drawn from Lua by wm.lua's render(), never by Zig (rule 4).
+-- Cleared by the next successful reload or by Escape (aster.input).
+function M.set_error(line1, line2)
+  M.state.error_bubble = { line1 = line1, line2 = line2 }
+end
+
+function M.clear_error()
+  M.state.error_bubble = nil
+end
+
+-- Re-runs the last known-good source (ADR-003 §6.4 step 4's rollback).
+-- Returns true only if that source both ran clean AND returned the
+-- adopted wm — the same bar a fresh reload has to clear.
+local function try_rollback()
+  if not M.state.config_src then return false end
+  local ok, result = pcall(load(M.state.config_src, "@wm.lua"))
+  return ok and result == M.state.wm
+end
+
 -- Reload protocol (ADR-003): read, compile, snapshot, run in pcall, verify,
 -- commit. The "snapshot" is implicit: M.state.config_src is never
 -- overwritten until the new source has actually succeeded (the last line
 -- of this function), so it's still the old good source for a rollback to
--- read from if `pcall(chunk)` throws.
+-- read from if `pcall(chunk)` throws or the result fails verification.
 function M.reload()
   local path = M.info.paths.config .. "/wm.lua"
   local src, err = host.read(path)
 
   if not src then
     if err == "not_found" then
-      builtin_default()
-      host.log("aster: no config, using built-in defaults")
+      M.clear_error()
+      if not M.state.wm then builtin_default() end
+      M.log("no config, using built-in defaults")
     else
-      host.log("aster: reload: " .. path .. ": " .. tostring(err))
+      M.log("reload: " .. path .. ": " .. tostring(err))
     end
     M.mark_dirty()
     return
@@ -65,25 +92,37 @@ function M.reload()
 
   local chunk, compile_err = load(src, "@wm.lua")
   if not chunk then
-    host.log("aster: " .. tostring(compile_err) .. " — keeping previous config")
+    M.log(tostring(compile_err) .. " — keeping previous config")
+    M.set_error(tostring(compile_err), "keeping previous config — desktop untouched")
     if not M.state.wm then builtin_default() end
     M.mark_dirty()
     return
   end
 
-  local ok, result_or_err = pcall(chunk)
+  -- Step 5, "verify": a config that never calls aster.wm.adopt() (or
+  -- returns something else) hasn't actually reset itself into the
+  -- singleton — treat it exactly like a runtime error, below.
+  local ok, result = pcall(chunk)
+  if ok and result ~= M.state.wm then
+    ok = false
+    result = "wm.lua must call aster.wm.adopt() and return its result"
+  end
+
   if not ok then
-    host.log("aster: wm.lua runtime error: " .. tostring(result_or_err) .. " — rolling back")
-    if M.state.config_src then
-      pcall(load(M.state.config_src, "@wm.lua"))
-    elseif not M.state.wm then
+    M.log("wm.lua error: " .. tostring(result) .. " — rolling back")
+    if try_rollback() then
+      M.set_error(tostring(result), "keeping previous config — desktop untouched")
+    else
+      -- Unconditional — see B10.
       builtin_default()
+      M.set_error("config rollback failed, running built-in defaults")
     end
     M.mark_dirty()
     return
   end
 
   M.state.config_src = src
+  M.clear_error()
   M.mark_dirty()
 end
 
