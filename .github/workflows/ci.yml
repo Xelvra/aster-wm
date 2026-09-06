@@ -57,7 +57,7 @@ jobs:
             libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev \
             libxtst-dev libgl1-mesa-dev libdrm-dev libgbm-dev libudev-dev \
             libdbus-1-dev libpipewire-0.3-dev libwayland-dev wayland-protocols \
-            libdecor-0-dev libibus-1.0-dev
+            libdecor-0-dev libibus-1.0-dev lua5.4
 
       - name: Build and install SDL3
         if: steps.sdl3-cache.outputs.cache-hit != 'true'

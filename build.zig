@@ -131,8 +131,14 @@ pub fn build(b: *std.Build) void {
     const conformance_cmd = b.addSystemCommand(&.{"tools/conformance.sh"});
     conformance_cmd.step.dependOn(b.getInstallStep());
 
-    const test_step = b.step("test", "Run unit tests, the core line budget, and the host-contract conformance suite");
+    // tests/ui/ (spec/architecture.md §9.1): Lua modules against the fake
+    // host, not a backend against the contract — needs nothing built, just
+    // a system Lua 5.4.
+    const ui_tests_cmd = b.addSystemCommand(&.{"tools/ui-tests.sh"});
+
+    const test_step = b.step("test", "Run unit tests, the core line budget, the host-contract conformance suite, and the tests/ui/ suite");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&budget_cmd.step);
     test_step.dependOn(&conformance_cmd.step);
+    test_step.dependOn(&ui_tests_cmd.step);
 }

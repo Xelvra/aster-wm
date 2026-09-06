@@ -13,15 +13,35 @@ local M = {}
 -- it's transient input state, not something a config reload should see.
 local dragging = nil
 
-local function spec_matches(spec, key, mods)
+-- The only modifier names a keybinding spec may use (spec/keys.md is
+-- normative for key names; this is the equivalent list for modifiers).
+local KNOWN_MODS = { ctrl = true, alt = true, shift = true, super = true }
+
+-- Parses "super+shift+q" into key="q", want={ctrl=false,...,super=true}.
+-- Returns nil, err if a part before the last isn't one of KNOWN_MODS, so a
+-- typo (e.g. "shft+q") fails loudly at bind time instead of silently
+-- registering as if the modifier had never been there.
+function M.parse_spec(spec)
   local parts = {}
   for part in spec:gmatch("[^+]+") do parts[#parts + 1] = part end
   local want = { ctrl = false, alt = false, shift = false, super = false }
-  local want_key = parts[#parts]
-  for i = 1, #parts - 1 do want[parts[i]] = true end
-  if key ~= want_key then return false end
-  return mods.ctrl == want.ctrl and mods.alt == want.alt
-    and mods.shift == want.shift and mods.super == want.super
+  local key = parts[#parts]
+  for i = 1, #parts - 1 do
+    local mod = parts[i]
+    if not KNOWN_MODS[mod] then
+      return nil, "unknown modifier '" .. mod .. "' in keybinding '" .. spec .. "'"
+    end
+    want[mod] = true
+  end
+  return key, want
+end
+
+-- Compares an event's mods against a parsed `want` table. A missing key in
+-- `mods` (nil, rather than false) must count as "not held", never fail the
+-- whole comparison outright.
+local function mods_match(mods, want)
+  return (mods.ctrl or false) == want.ctrl and (mods.alt or false) == want.alt
+    and (mods.shift or false) == want.shift and (mods.super or false) == want.super
 end
 
 local function focused_window(state)
@@ -36,7 +56,8 @@ function M.dispatch(e)
   if e.type == "key_down" then
     if wm then
       for spec, fn in pairs(wm.keybindings) do
-        if spec_matches(spec, e.key, e.mods) then
+        local key, want = M.parse_spec(spec)
+        if key == e.key and mods_match(e.mods, want) then
           fn()
           aster.mark_dirty()
           return

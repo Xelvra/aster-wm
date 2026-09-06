@@ -33,8 +33,21 @@ local events = {}
 
 local function push(ev) events[#events + 1] = ev end
 
-function M._push_key(key, mods) push({ type = "key_down", key = key, mods = mods or {} }) end
-function M._push_key_up(key, mods) push({ type = "key_up", key = key, mods = mods or {} }) end
+-- The real SDL backend always sends all four modifier keys as booleans
+-- (spec/host-contract.md); fill in whatever a caller omitted the same way,
+-- so tests exercise the event shape production code actually sees.
+local function full_mods(mods)
+  mods = mods or {}
+  return {
+    ctrl = mods.ctrl or false,
+    alt = mods.alt or false,
+    shift = mods.shift or false,
+    super = mods.super or false,
+  }
+end
+
+function M._push_key(key, mods) push({ type = "key_down", key = key, mods = full_mods(mods) }) end
+function M._push_key_up(key, mods) push({ type = "key_up", key = key, mods = full_mods(mods) }) end
 function M._push_text(str) push({ type = "text", text = str }) end
 function M._push_mouse_move(x, y, dx, dy) push({ type = "mouse_move", x = x, y = y, dx = dx or 0, dy = dy or 0 }) end
 function M._push_mouse_down(x, y, button) push({ type = "mouse_down", x = x, y = y, button = button or "left" }) end
@@ -133,20 +146,73 @@ _G.host = {
   end,
 }
 
--- ---- __native_render (no-op; tests/ui/ never checks pixels) ------------
+-- ---- __native_render -----------------------------------------------
+--
+-- As a reference implementation, this must be at least as strict as the
+-- real renderer's luaL_check* argument checks (src/host/bindings.zig), or
+-- a typo that passes nil/a wrong type here would sail through tests/ui/
+-- and only blow up against the real backend. Drawing itself stays a no-op
+-- — tests/ui/ never checks pixels — only argument shape is validated.
+
+local function checknum(name, argn, v)
+  if type(v) ~= "number" then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (number expected, got " .. type(v) .. ")", 3)
+  end
+end
+
+local function checkstr(name, argn, v)
+  if type(v) ~= "string" then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (string expected, got " .. type(v) .. ")", 3)
+  end
+end
 
 _G.__native_render = {
-  fill_rect = function() end,
-  round_rect = function() end,
-  rect_border = function() end,
-  gradient_border = function() end,
-  glyph = function() end,
-  text = function() end,
-  text_width = function(str) return #str * 8 end,
+  fill_rect = function(s, x, y, w, h, color)
+    checknum("fill_rect", 2, x); checknum("fill_rect", 3, y)
+    checknum("fill_rect", 4, w); checknum("fill_rect", 5, h)
+    checknum("fill_rect", 6, color)
+  end,
+  round_rect = function(s, x, y, w, h, r, color)
+    checknum("round_rect", 2, x); checknum("round_rect", 3, y)
+    checknum("round_rect", 4, w); checknum("round_rect", 5, h)
+    checknum("round_rect", 6, r); checknum("round_rect", 7, color)
+  end,
+  rect_border = function(s, x, y, w, h, thickness, color)
+    checknum("rect_border", 2, x); checknum("rect_border", 3, y)
+    checknum("rect_border", 4, w); checknum("rect_border", 5, h)
+    checknum("rect_border", 6, thickness); checknum("rect_border", 7, color)
+  end,
+  gradient_border = function(s, x, y, w, h, thickness, color1, color2)
+    checknum("gradient_border", 2, x); checknum("gradient_border", 3, y)
+    checknum("gradient_border", 4, w); checknum("gradient_border", 5, h)
+    checknum("gradient_border", 6, thickness)
+    checknum("gradient_border", 7, color1); checknum("gradient_border", 8, color2)
+  end,
+  blit = function(s, src, x, y)
+    if type(src) ~= "table" then
+      error("bad argument #2 to 'blit' (surface expected, got " .. type(src) .. ")", 2)
+    end
+    checknum("blit", 3, x); checknum("blit", 4, y)
+  end,
+  glyph = function(s, x, y, row, color)
+    checknum("glyph", 2, x); checknum("glyph", 3, y)
+    checknum("glyph", 4, row); checknum("glyph", 5, color)
+  end,
+  text = function(s, x, y, str, color)
+    checknum("text", 2, x); checknum("text", 3, y)
+    checkstr("text", 4, str); checknum("text", 5, color)
+  end,
+  text_width = function(str) checkstr("text_width", 1, str); return #str * 8 end,
   line_height = function() return 16 end,
-  push_clip = function() end,
+  push_clip = function(s, x, y, w, h)
+    checknum("push_clip", 2, x); checknum("push_clip", 3, y)
+    checknum("push_clip", 4, w); checknum("push_clip", 5, h)
+  end,
   pop_clip = function() end,
-  get_pixel = function() return 0 end,
+  get_pixel = function(s, x, y)
+    checknum("get_pixel", 2, x); checknum("get_pixel", 3, y)
+    return 0
+  end,
 }
 
 return M

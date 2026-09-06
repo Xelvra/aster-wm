@@ -136,3 +136,24 @@ here. A naive "peek-and-return" implementation using `SDL_PollEvent` or
 a second place events can go missing (compare with B3 above). The timeout
 is ~1000ms so a time-based Lua widget still gets a tick roughly once a
 second even with zero input.
+
+## B7 — A typo in `draw_frame` took the whole process down, not just a window
+
+**Symptom:** a config redefining `wm:draw_frame` with a bug (e.g. indexing a
+missing theme field) crashed `aster` outright — `lua error: ... attempt to
+index a nil value`, exit code 1 — rather than leaving the desktop running.
+
+**Cause:** `lua/aster/wm.lua`'s `M:render` called `self:draw_frame(win)`
+directly, with no `pcall`, while every app callback (`draw`/`key`/`text`/
+`tick`) already goes through `wm:guard`. `draw_frame` is shared across every
+open window and is exactly the function the README and demo GIFs tell users
+to redefine live, so a bug in it is one of the most likely runtime errors to
+hit in practice — and it was also the one with no safety net at all.
+
+**Fix:** `M:render_frame` wraps `self:draw_frame(win)` in its own `pcall`,
+separate from `wm:guard`. On error it logs and swaps `self.draw_frame` to
+`M.default_draw_frame` for good, then keeps going — closing the window would
+be wrong here, since the bug is in the config, not in the app running inside
+it. Because `draw_frame` is one function shared by every window, falling
+back permanently (rather than per-window) also avoids re-logging the same
+crash once per window per frame.

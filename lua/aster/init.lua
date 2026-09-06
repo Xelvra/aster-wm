@@ -16,15 +16,29 @@ M.frame = loop.frame
 M.shutdown = loop.shutdown
 M.mark_dirty = loop.mark_dirty
 
+-- The core's own bootstrap screen, drawn with the render primitives
+-- directly rather than pulled in from apps/ — ADR-007 forbids the core
+-- referencing any app by name, including the ones shipped in this repo.
+local function fallback_screen(theme)
+  return {
+    draw = function(win, surface)
+      M.render.fill_rect(surface, win.x, win.y, win.w, win.h, theme.background)
+      M.render.text(surface, win.x + 12, win.y + 12,
+        "no ~/.config/aster/wm.lua found", theme.text)
+      M.render.text(surface, win.x + 12, win.y + 12 + M.render.line_height(),
+        "running built-in defaults — super+q closes this window", theme.inactive)
+    end,
+  }
+end
+
 -- The config that ships when ~/.config/aster/wm.lua doesn't exist yet, or
 -- can't be recovered from. Never leaves the user at a blank screen.
 local function builtin_default()
   local wm = M.wm.adopt {}
   wm.theme = { background = 0x1e2327, accent = 0xff5544, inactive = 0x3b4248, text = 0xd8dee9 }
-  local hello = require("apps.hello-window")
   wm:bind("super+q", function() wm:close(M.state.windows[M.state.focus]) end)
   if not next(M.state.windows) then
-    wm:open { app = hello, title = "hello" }
+    wm:open { app = fallback_screen(wm.theme), title = "aster" }
   end
   return wm
 end

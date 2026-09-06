@@ -25,13 +25,22 @@ function M.adopt(opts)
   wm.border = opts.border or 2
   wm.layout = opts.layout or "float"
   wm.keybindings = {}
-  wm.theme = wm.theme or {}
+  -- ADR-003 names theme among what a reload must reset: removing a
+  -- `wm.theme = {...}` line from the config must actually remove its
+  -- effect, not leave the last-seen theme stuck.
+  wm.theme = opts.theme or {}
   wm.draw_frame = M.default_draw_frame
 
   return wm
 end
 
 function M:bind(spec, fn)
+  local input = require("aster.input")
+  local key, err = input.parse_spec(spec)
+  if not key then
+    host.log("aster: wm:bind: " .. err .. " — binding not registered")
+    return
+  end
   self.keybindings[spec] = fn
 end
 
@@ -64,7 +73,15 @@ function M:close(win)
   local aster = require("aster")
   local state = aster.state
   state.windows[win.id] = nil
-  if state.focus == win.id then state.focus = nil end
+  if state.focus == win.id then
+    -- Hand focus to whatever's now on top, so the keyboard doesn't go dead
+    -- just because the previously-focused window closed.
+    local next_win, next_z = nil, -1
+    for _, w in pairs(state.windows) do
+      if w.z > next_z then next_win, next_z = w, w.z end
+    end
+    state.focus = next_win and next_win.id or nil
+  end
 end
 
 -- Topmost window whose bounds contain (x, y), or nil.
@@ -106,6 +123,19 @@ function M:guard(win, fn, ...)
   return true, result
 end
 
+-- Calls self:draw_frame(win) under pcall, separately from guard(): a crash
+-- here is the config's fault, not the app's, so it must not close the
+-- window — instead fall back to the built-in frame for good and keep
+-- going (see B7).
+function M:render_frame(win)
+  local ok, err = pcall(self.draw_frame, self, win)
+  if not ok then
+    host.log("aster: wm.lua draw_frame crashed: " .. tostring(err) .. " — falling back to the built-in frame")
+    self.draw_frame = M.default_draw_frame
+    pcall(self.draw_frame, self, win)
+  end
+end
+
 function M:render(surface)
   self.surface = surface
   local r = require("aster.render")
@@ -115,8 +145,14 @@ function M:render(surface)
 
   r.fill_rect(surface, 0, 0, out.w, out.h, self.theme.background or 0x111111)
 
-  for id, win in pairs(state.windows) do
-    win.focused = (state.focus == id)
+  -- pairs() has no defined order; paint back-to-front by z so the topmost
+  -- window (highest z, per focus_window/window_at) is also drawn last.
+  local ordered = {}
+  for _, win in pairs(state.windows) do ordered[#ordered + 1] = win end
+  table.sort(ordered, function(a, b) return a.z < b.z end)
+
+  for _, win in ipairs(ordered) do
+    win.focused = (state.focus == win.id)
     local crashed = false
     if win.app and win.app.draw then
       r.clipped(surface, win.x, win.y, win.w, win.h, function()
@@ -127,7 +163,7 @@ function M:render(surface)
     -- drawn after the app's content so the frame stays visible on top —
     -- unless guard() just closed this window, in which case there's
     -- nothing left to frame.
-    if not crashed then self:draw_frame(win) end
+    if not crashed then self:render_frame(win) end
   end
 end
 

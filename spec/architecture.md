@@ -77,6 +77,10 @@ editor, the file browser and the REPL are loaded by `config/wm.lua` exactly the 
 third-party app is. Each app draws inside a clip rectangle, so a buggy app can't paint over
 its neighbours, and a crashing app closes its own window rather than the desktop.
 
+Global keybindings are always checked before `app.key` — a window manager binding like
+`super+q` must work even inside a buggy or malicious app, the same way i3/sway/awesome grab
+their own shortcuts first. `app.key`'s return value is not consumed by anything.
+
 ## Backends
 
 | Backend | Loop | Notes |
