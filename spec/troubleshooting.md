@@ -451,3 +451,284 @@ bytes, with no codepoint awareness.
 **Fix:** the hard-split loop now walks `word` one UTF-8 codepoint at a time
 (`each_codepoint`), summing each codepoint's own width once instead of
 re-measuring the whole prefix, and only ever cuts on a codepoint boundary.
+
+## B23 — Zig's default UBSan instrumentation traps inside `lua_newstate` on wasm32-freestanding, but only there
+
+**Symptom:** `aster-wasm`'s `lua_newstate()` trapped with `RuntimeError:
+unreachable` inside `ubsan_rt.typeMismatch`, every time, on the very first
+call — before any of this project's own code ran. The identical Lua
+source, compiled for the native `sdl`/`aster-conformance` targets with the
+same `zig cc`-driven build, never hits this.
+
+**Cause:** Zig's C compilation adds a broad default `-fsanitize=...` set
+(alignment, null, nonnull-attribute, ...) unless told otherwise. Lua
+5.4's `lua_State`/`GCObject` machinery relies on pointer-punning tricks
+that are technically UB-adjacent but universally relied upon in practice
+on every platform Lua actually ships on — something about wasm32's
+pointer/alignment representation makes one of those checks fire where the
+same code on a native target's ABI doesn't.
+
+**Fix:** `build.zig`'s `wasm_c_flags` passes `-fno-sanitize=all` for the
+wasm backend's C sources specifically (Lua + `vendor/rt.c`), not applied
+to the native `sdl` build. Confirmed this isn't papering over an actual
+bug, not just assumed: behavior after disabling the trap is exactly
+correct (spec/adr/013's Node.js harness — real `aster_boot`/`aster_frame`
+calls against the real `lua/aster/*` core, not a synthetic test).
+
+## B24 — `libc.zig`'s exports were silently dropped from the wasm build, and the linker didn't say so
+
+**Symptom:** the very first `zig build` wiring the wasm backend into
+`build.zig` reported success — zero errors — but `WebAssembly.Module.exports()`
+on the resulting `.wasm` showed only `memory`, none of `aster_init`/
+`aster_boot`/.../`malloc`/`strcmp`/etc. Setting `exe.rdynamic = true` (to
+make the `aster_*` entry points actually appear in the export table)
+turned the same build into over a hundred `undefined symbol` errors for
+things like `time`, `strcmp`, `snprintf` — symbols `libc.zig` genuinely
+defines.
+
+**Cause:** nothing in `src/main_wasm.zig` ever referenced
+`src/backends/wasm/libc.zig` by name — Zig only analyzes and emits a
+file's declarations if something reachable from the root module imports
+it, `export fn` or not. Without `rdynamic`, wasm-ld apparently tolerated
+the resulting undefined symbols by turning them into bogus
+zero-returning imports instead of failing the link — the same silent
+"wrong instead of missing" failure mode ADR-013's own investigation hit
+earlier with a hand-rolled `wasm-ld --allow-undefined` invocation, this
+time from `zig build-exe`'s own default behavior.
+
+**Fix:** `main_wasm.zig` has a `comptime { _ = @import("backends/wasm/libc.zig"); }`
+block specifically to force the analysis. Generalizable lesson: on this
+target, "the build succeeded" and "the exports/imports are the ones you
+expect" are two separate claims — check `WebAssembly.Module.imports()`/
+`.exports()` on the actual output before trusting a clean build, the same
+way ADR-009's SDL2→SDL3 migration learned not to trust "it compiled" for
+a native backend either.
+
+## B25 — `host.list()` returned entry names with a leading `/`, and `host.remove()` on a directory silently did nothing
+
+**Symptom:** `spec/conformance/06_fs.lua` failed on the wasm backend only:
+`list must include the file just written`, even though the file had
+genuinely been written and `host.read()` on its exact path succeeded.
+
+**Cause:** `fs_wasm.zig`'s `list()`/`remove()` forward the raw directory
+path to JS unchanged; the JS side (both `glue.js` and
+`tools/wasm-conformance.js`) matched storage keys with a plain
+`key.startsWith(path)` and then returned `key.slice(path.length)` as the
+entry name. For a stored key `"<dir>/round-trip.txt"` and `path ==
+"<dir>"` (no trailing slash — host.info().paths never has one), that
+produces the entry name `"/round-trip.txt"`, not `"round-trip.txt"` —
+`fs_native.zig`'s real directory iteration never has this problem since
+`std.Io.Dir.iterate()` already returns bare names. Separately,
+`host.remove()` only ever deleted a key matching the path *exactly*,
+never anything nested under it as a prefix — a no-op on every call in the
+test, which never stores anything at the bare directory path itself.
+
+**Fix:** both JS files now match `key.startsWith(path + "/")` and slice
+off `path.length + 1`, and `remove()` deletes the exact-match key *and*
+every key nested under `path + "/"`, succeeding if either found
+something — matching `fs_native.zig`'s `deleteTree`, which is recursive
+by construction.
+
+## B26 — `Module.addEmbedPath` doesn't reliably reach an `@embedFile` call once the calling file is part of a circular import
+
+**Symptom:** tried replacing `lua_embed.zig`/`conformance_embed.zig` (two
+sibling-module files at the repo root, ADR-006's font.zig trick) with
+`std.Build.Module.addEmbedPath` — a real Zig 0.16 API built for exactly
+this: letting `@embedFile` reach outside a module's own root directory
+without a helper file. `src/backends/wasm/modules.zig`'s
+`@embedFile("aster/init.lua")` failed with `FileNotFound` even though
+`wasm_mod.addEmbedPath(b.path("lua"))` was set and the CLI invocation
+genuinely carried `--embed-dir=.../lua`.
+
+**Investigation:** isolated reproductions (a fake root importing a copy
+of `modules.zig`, with or without the real C-source compilation, with
+or without `-rdynamic`, with 1-3 embed-dirs) all **worked** — the
+mechanism itself is sound. It only failed once the *real*
+`src/host/lua.zig` was in the import graph and `lua.State.init()` was
+actually called (not just referenced as a value) — `lua.zig` and
+`src/host/bindings.zig` import each other (`lua.zig`'s `bindings =
+@import("bindings.zig")`, `bindings.zig`'s `lua = @import("lua.zig")`),
+and `modules.zig` also imports `lua.zig` for its `c` (lua.h) namespace.
+Root cause not fully isolated — likely an interaction between this
+circular pair and Zig's embed-path-to-module association — but the
+trigger condition is real and reproducible on demand: a plain synthetic
+circular-import pair (no Lua, no C sources) did *not* reproduce it, so
+it's specific to this codebase's actual shape, not circular imports in
+general.
+
+**Fix:** reverted to the sibling-module-file approach (kept
+`lua_embed.zig`/`conformance_embed.zig` at the repo root) rather than
+spend more time on a from-scratch Zig bug report mid-milestone.
+`addEmbedPath` remains the technically-correct tool for this and is
+worth retrying on a future Zig release, or once the circular
+`lua.zig`/`bindings.zig` import is broken up for its own sake — but
+don't reach for it here again without re-verifying against the real
+import graph first, not just a synthetic reproduction.
+
+**Resolved, and the cause above is wrong.** `addEmbedPath` is not
+unreliable here: on this Zig 0.16.0 it does nothing for `@embedFile` at
+all. A two-line `main.zig` with no Lua, no C sources and no circular
+imports fails identically under a bare `zig build-exe
+--embed-dir=<dir> -Mroot=src/main.zig`, with the flag before or after
+`-M`, with an absolute or relative dir, and for every spelling of the
+embedded path. The flag is accepted and forwarded; `@embedFile`'s search
+never consults it.
+
+The earlier reproductions "worked" because they never embedded anything:
+container-level decls are analyzed lazily, so a `pub const x =
+@embedFile(...)` nothing references never opens the file. The apparent
+trigger condition — the real `lua.zig` in the graph and
+`lua.State.init()` actually called — was only the first code path that
+forced the decls to be analyzed at all (`init` → `modules.register`).
+**A reproduction of a compile-time builtin proves nothing unless the
+result is referenced from code that is actually analyzed.**
+
+The working mechanism is a mapped module, not an embed path:
+`@embedFile` resolves module names the same way `@import` does
+(ziglang/zig#14553), so build.zig maps each embedded `.lua` file with
+`Module.addAnonymousImport` under its repo-relative name
+(`"lua/aster/init.lua"`) and the call sites `@embedFile` that name. It
+crosses the module boundary with no helper file, so both root-level
+`lua_embed.zig`/`conformance_embed.zig` are gone and the repo root is
+back to directories and conventional files.
+
+## B27 — `src/backends/wasm/`'s unit tests never ran, and three real bugs were hiding behind that
+
+**Symptom:** none, which was the problem. `src/backends/wasm/libc.zig` carried two `test`
+blocks that had never executed: `zig build test` builds its unit-test binary from
+`src/main.zig`'s module, and nothing in that import graph reaches the wasm-only files
+(`src/host/lua.zig` pulls in `modules.zig` only under `if (comptime ...isWasm())`, and
+`libc.zig` hangs off `main_wasm.zig`). Proven by making one of those tests fail on purpose:
+`zig build test` stayed green.
+
+**Cause of the gap:** a wasm test binary can't just be added next to the native one. Two
+things block the obvious attempts, both verified before settling on the shape below:
+
+- `std.testing` does not compile for `wasm32-freestanding` on this toolchain — it reaches
+  `std.Io.Threaded`, which reaches `posix` (`getrandom`, `IOV_MAX`). Tests that run on this
+  target need their own tiny `expect` helpers. A plain `return error.TestFailed` is fine.
+- Zig's default test runner needs stdout and the same `Io`, so the build passes
+  `tools/wasm-test-runner.zig` (`.mode = .simple`) instead: it exports the test count, a
+  `run` entry point, and the names that failed, and `tools/wasm-tests.js` reads them back.
+
+The test module is rooted at `libc.zig`, not `main_wasm.zig`, because a test build compiles
+the test blocks of *every* file in the root's import graph — and `main_wasm.zig` reaches
+`src/render/`, whose tests use `std.testing` correctly, since the native binary is where
+those run.
+
+**Bugs found once the tests actually ran** (all three failed on the real target, all three
+now covered):
+
+1. `%d` with a plain `int` read the vararg as `long long`. `vsnprintfImpl` skipped the length
+   modifier and always read `c_longlong`, on the belief that lstrlib.c's `addlenmod` always
+   inserts `"ll"` — it doesn't for the formats lstrlib.c writes by hand:
+   `string.format("%q", s)` escapes a control character with `"\%d"`/`"\%03d"` and
+   num2straux appends `"p%+d"`, all with an `int`. On wasm32 varargs live in a memory buffer,
+   so reading eight bytes where four were written reads past the argument. **This is the
+   class of bug a native test cannot see** — on x86-64 the same code passes.
+2. `%G` never stripped trailing zeros (`1.00000E+15` instead of `1E+15`).
+   `printfStripTrailingZerosExp` searched for `'e'`, but the uppercase path had already
+   written `'E'`, so it returned the string untouched.
+3. `%#g` dropped the trailing decimal point (`100000` instead of `100000.`). The `.f` branch
+   appended it for `alt and precision == 0`; the `.g` branch didn't.
+
+**A fourth cause, since resolved:** `std.fmt.float.render` rounds the *shortest* decimal
+representation rather than the exact binary value, so fixed-precision output differed from C
+in the last digit — `%.2f` of 1.005 gave `1.01` where C gives `1.00` (1.005 is really
+1.00499999999999989342), `%.0f` of 0.5 gave `1` where C gives `0`, `%f` of 1e100 printed
+zeros instead of the true expansion, and subnormals printed as `5e-324` instead of
+`4.94066e-324`. Measured against glibc over 399 conversions: 27 differed before the three
+fixes above, 21 after, and every one of those 21 was this. `tostring()` (`"%.14g"`) was never
+affected — 14 significant digits sit inside the shortest round-trip form.
+
+`libc.zig` now converts exactly instead (ADR-014): a double is `m × 2^e`, and
+`m / 2^k = m × 5^k / 10^k`, so the exact digits come from multiplying a decimal digit array
+by 2 or by 5 — no division, no binary bignum. Rounding is to nearest with exact ties to
+even. Verified differentially against glibc over 12,029 doubles × 10 format specifiers, with
+one deliberate difference recorded in ADR-014: `%#g` of 999999.5, where glibc contradicts
+itself and drops digits `#` is defined to keep.
+
+
+## B28 — the browser's `host.write`/`host.read` lost every byte that wasn't valid UTF-8, and the conformance suite couldn't see it
+
+**Symptom:** none from the suite, which is the interesting half. `spec/conformance/06_fs.lua`
+round-tripped `"hello"` and passed on both backends, while the wasm backend running in a
+browser turned a six-byte file containing `0xff 0xfe 0x00` into a ten-byte one.
+
+**Cause:** `src/backends/wasm/glue.js` stored file contents as decoded text —
+`TextDecoder` on the way in, `TextEncoder` on the way out — so every byte that isn't valid
+UTF-8 became U+FFFD (three bytes) on the way back. A Lua string is bytes, not text
+(`spec/host-contract.md`), and `wm.lua` is only ASCII until someone pastes something into
+it.
+
+**Why the suite couldn't catch it:** `tools/wasm-conformance.js` implemented the same
+eleven `aster` imports a second time, over Node `Buffer`s, which are byte-exact by
+construction. What the suite certified was never the code the browser runs — the same
+duplication B25 had already shown up as one bug that had to be fixed in two files.
+
+**Fix:** `glue.js` now owns `hostImports(env)`, and everything that differs between a tab
+and the test runner (where linear memory is, where files live, what `present` and `log` do)
+arrives in `env`. `tools/wasm-conformance.js` requires that file and installs a
+`localStorage` stand-in — a Map of strings, which is what Web Storage is — rather than
+handing glue.js a friendlier byte-keyed store of its own: the encoding a store does on the
+way in and out is exactly where this bug lived, so the suite has to run the browser's store,
+not a substitute for it. Contents cross as one code unit per byte (0-255), which localStorage
+keeps unchanged (verified in Chrome, not just in Node).
+
+`06_fs.lua` now writes `"b\xff\xfe\x00\x01ytes"` and requires it back byte for byte.
+That assertion was checked both ways before being believed: against the old text-decoding
+store it fails ("wrote 9 bytes, read back 13"), against the fix it passes, and SDL passes
+either way since it was never the backend with the problem.
+
+
+## B29 — the browser never called `aster.shutdown()`, and `aster_push_quit` had no caller
+
+**Symptom:** none the conformance suite could see — `spec/host-contract.md` says `"quit"`
+from `frame()` "means stop calling `frame` and call `shutdown`", and `src/main.zig` holds
+that on every other backend via a `defer` around the SDL main loop. `docs/demo/index.html`
+called `load/init/attachInput/boot/run` and nothing else; `glue.js`'s `run()` tick, on seeing
+`frame() === "quit"`, just returned. `aster_push_quit` was exported from `main_wasm.zig` (the
+wasm analog of `SDL_EVENT_QUIT`) but `Aster` had no method wrapping it — confirmed by diffing
+the wasm binary's exports against `glue.js`'s calls, nothing else exercises it.
+
+**Why it matters:** a real tab close is a `beforeunload` event, not a `frame()` return value
+— there's no guarantee another `requestAnimationFrame` callback ever runs after it fires, so
+waiting for the next tick to notice a queued quit event is not safe to rely on there.
+
+**Fix:** `Aster.pushQuit()` now wraps the export; `run()`'s tick calls `this.shutdown()`
+before returning when `frame()` reports `"quit"` (the keybinding-driven path, verified by
+pushing a quit event into a running loop and observing both calls fire); and
+`attachInput` adds a `beforeunload` listener that pushes the quit event and drains it with
+one direct `frame()` call rather than waiting on the RAF loop, calling `shutdown()` itself if
+that returns `"quit"` — verified in Chrome by dispatching the event manually and watching
+`pushQuit()`/`shutdown()` log in order.
+
+**Fixed alongside, same file:** `mousedown`/`mouseup` passed `attachInput`'s fractional
+`clientX/clientY - rect` straight to `pushMouseDown`/`pushMouseUp`, which truncate towards
+zero (`x | 0`) on the wasm side; `mousemove` already rounded before pushing. A click and a
+move at the same physical pixel could therefore report adjacent coordinates. Both handlers
+now round the same way `mousemove` does, before the value crosses into wasm.
+
+
+## B30 — `runScript` and `aster_run_conformance` duplicated the same pcall/skip/error logic, and it had already drifted
+
+**Symptom:** `src/host/lua.zig`'s `runScript` (every non-wasm backend, loading a file via
+`luaL_loadfilex`) and `main_wasm.zig`'s `aster_run_conformance` (no filesystem on that
+backend, so it loads an `@embedFile`'d buffer via `luaL_loadbufferx` instead) each reimplemented
+the same `lua_pcallk` → check for a `"SKIP:"`-prefixed error → report as skip (exit 2), report
+as failure (exit 1) otherwise. They had already diverged: `runScript` printed the skip message
+with `std.debug.print`, `aster_run_conformance` with `fs.log` — and `reportError`'s own comment
+a few lines above `runScript` said `std.debug.print` was "the wrong tool here regardless of
+backend", contradicted by the code right below it.
+
+**Why it's the same class as B25/B28:** two independent implementations of one contract path,
+kept in step by hand instead of by the compiler. It's a smaller instance of the exact pattern
+`glue.js`/`tools/wasm-conformance.js` and the browser/Node `aster` imports already were —
+nothing here reached across the wasm boundary, but the lesson (don't let a second copy of
+host-facing control flow exist to drift) is the same one.
+
+**Fix:** the pcall/skip/error handling was pulled into `State.runLoaded`, which both callers
+invoke on the function each already loaded onto the stack by its own means. Both now go
+through `fs.log` for a declared skip, matching `reportError`, so the comment above it is true
+again. Re-verified clean: `wasm-tests` 8/8, `tests/ui` 22/22, conformance (sdl) 7/7,
+wasm-conformance 7/7.

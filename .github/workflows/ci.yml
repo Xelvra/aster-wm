@@ -80,6 +80,11 @@ jobs:
       - name: aster runs headless
         run: timeout 2 env SDL_VIDEODRIVER=dummy ./zig-out/bin/aster || [ $? -eq 124 ]
 
+      # Same bar, second backend (ADR-013, M5): boots the real
+      # lua/aster/* core under Node instead of a synthetic test.
+      - name: aster-wasm boots headless
+        run: node tools/wasm-conformance.js zig-out/bin/aster-wasm-conformance.wasm
+
       # Unit tests + the core line budget (tools/budget.sh) + the full
       # host-contract conformance suite — all three are wired into this one
       # command by build.zig, so CI can't drift from what a contributor runs

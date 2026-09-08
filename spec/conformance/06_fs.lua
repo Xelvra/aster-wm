@@ -13,6 +13,19 @@ assert(ok == true, "write must create missing parent directories and succeed, go
 local data, rerr = host.read(path)
 assert(data == "hello", "read must round-trip exactly what was written, got " .. tostring(data) .. " / " .. tostring(rerr))
 
+-- A Lua string is bytes, not text (spec/host-contract.md's "Errors and
+-- values"), so every byte has to survive — including the ones no text
+-- encoding would keep. A backend storing files as decoded text passes the
+-- "hello" case above and silently corrupts this one.
+local raw = "b\xff\xfe\x00\x01ytes"
+local rawok, rawerr = host.write(path, raw)
+assert(rawok == true, "write must accept arbitrary bytes, got " .. tostring(rawerr))
+local rawback = host.read(path)
+assert(rawback == raw, "read must round-trip every byte, not just valid UTF-8: wrote "
+  .. #raw .. " bytes, read back " .. tostring(rawback and #rawback))
+
+assert(host.write(path, "hello"))
+
 local entries, lerr = host.list(base)
 assert(entries, "list must succeed on a directory write() just created, got " .. tostring(lerr))
 local found, first_mtime = false, nil

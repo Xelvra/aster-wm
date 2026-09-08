@@ -5,11 +5,11 @@ weekend — contributing should feel the same way.
 
 ## The way in is Lua, not Zig
 
-Almost everything a first-time contributor wants to do lives in `themes/`, `apps/`, or
+Almost everything a first-time contributor wants to do lives in `config/wm.lua`, `apps/`, or
 `lua/aster/`. You don't need to know Zig, and you don't need to understand the host contract,
 to send a useful PR.
 
-- Want a new look? → [`themes/`](themes/)
+- Want a new look? → [`config/wm.lua`](config/wm.lua), set `wm.theme`
 - Want to build something on top? → [`apps/`](apps/), start with
   [`apps/hello-window.lua`](apps/hello-window.lua) (30 lines)
 - Want to fix WM behavior? → [`lua/aster/`](lua/aster/)
@@ -44,12 +44,12 @@ the case.
 
 ## Adding a theme
 
-A theme is a self-contained Lua file in `themes/` that sets `wm.theme` and, optionally,
-overrides drawing functions like `draw_frame`. Copy [`themes/minimal.lua`](themes/minimal.lua)
-as a starting point. No build step — drop the file in, point `config/wm.lua` at it, `Ctrl+S`.
+A theme is just [`config/wm.lua`](config/wm.lua) setting `wm.theme` and, optionally,
+overriding drawing functions like `draw_frame`. No build step, no separate file to point at
+— edit `wm.theme` in place, `Ctrl+S`.
 
-A theme is code and it runs with your full permissions. That's the point, and it's also
-why you should read one before you run it.
+`config/wm.lua` is code and it runs with your full permissions. That's the point, and it's
+also why you should read one before you run it.
 
 ## Adding an app
 

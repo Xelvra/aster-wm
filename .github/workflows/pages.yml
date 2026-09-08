@@ -1,0 +1,59 @@
+name: Deploy wasm demo to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        run: |
+          ZIG_VERSION=$(cat .zig-version)
+          curl -fsSL -o zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          sudo tar -C /usr/local -xJf zig.tar.xz
+          sudo ln -sf "/usr/local/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
+
+      # `zig build wasm`, not plain `zig build` — the default step also
+      # builds the native `aster`/`aster-conformance`, which need the
+      # SDL3 dev packages ci.yml's job installs; this job doesn't.
+      - name: Build aster-wasm.wasm
+        run: zig build wasm -Doptimize=ReleaseSmall
+
+      # docs/demo/ is the repo's own convention (see .gitignore: the
+      # built .wasm/.js are ignored there, index.html is tracked) — this
+      # fills in those two ignored files the same way a contributor would
+      # for a local preview: `zig build wasm` plus a manual copy.
+      - name: Assemble the site
+        run: |
+          cp src/backends/wasm/glue.js docs/demo/glue.js
+          cp zig-out/bin/aster-wasm.wasm docs/demo/aster-wasm.wasm
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/demo
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -47,3 +47,14 @@ starts, not as a side effect of whichever way is fastest to get wasm building.
   structure, not to `spec/host-contract.md`'s twelve `host.*` functions — no ADR is strictly
   required by the letter of the rule, but one should be written anyway when this is resolved,
   the same way ADR-010 recorded `clockFn`'s addition.
+
+**Update, M5 (ADR-013):** the second backend arrived without forcing this choice. wasm's
+execution model doesn't share `main.zig`'s "own the loop, call `frame()`" shape at all — the
+browser drives via `requestAnimationFrame` calling exported functions directly (this ADR's own
+`§3.2` reference code already shows this inversion) — so `src/main_wasm.zig` is a wholly
+separate entry point, not a second branch inside `main.zig`. There was no idle-wait call to
+make backend-agnostic, because wasm's `Backend.waitFn` never blocks the way SDL's does (see
+`src/backends/wasm/backend.zig`'s own header comment). This ADR's fork (Option A vs B) is
+therefore still entirely open, and still applies — the moment a second backend that *does*
+share `main.zig`'s loop shape shows up (DRM, most likely, in phase B), this has to be decided
+then, not assumed away by wasm's absence having been comfortable.

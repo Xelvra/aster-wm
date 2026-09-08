@@ -113,9 +113,9 @@ problem degrades the desktop, it never stops it from booting. See
 | Backend | Loop | Notes |
 |---|---|---|
 | SDL3 | own `while` loop | reference implementation, the one CI runs (ADR-009) |
-| DRM/KMS + evdev | own loop, page flip | needs seatd/libseat and VT handling |
-| WebAssembly | `requestAnimationFrame` | the reason the loop is inverted |
-| bare metal | own loop, `hlt` when idle | no `spawn`; the same `wm.lua` still runs |
+| WebAssembly | `requestAnimationFrame` | the reason the loop is inverted; freestanding, own libc (ADR-013) |
+| DRM/KMS + evdev | own loop, page flip | needs seatd/libseat and VT handling — not built yet |
+| bare metal | own loop, `hlt` when idle | no `spawn`; the same `wm.lua` still runs — not built yet |
 
 A backend is done when it passes `spec/conformance/`. Capabilities it genuinely lacks are
 declared in `host.info().caps` and return `"unsupported"` — the desktop adapts (the bar
@@ -125,8 +125,9 @@ starting `"SKIP:"`, which `aster-conformance` reports as a declared skip (exit c
 pass — a capability a backend genuinely can't run becomes a manual release-checklist item,
 never something that silently looks green.
 
-The two-binary split (`aster`, and `aster-conformance` built with `build_options.conformance`
-so it alone exposes `host._inject`) keeps that test-only surface out of every real build.
+The two-binary split (a release build, and a `-conformance` build with `build_options.conformance`
+so it alone exposes `host._inject`) keeps that test-only surface out of every real build —
+`aster`/`aster-conformance` on the SDL side, `aster-wasm`/`aster-wasm-conformance` on wasm.
 `__native_render.get_pixel` is a second, always-present test hook, unrelated to the
 conformance-only split — it exists purely so `spec/conformance/02_surface.lua` can read back a
 pixel it just wrote; no app or theme needs it, and none should use it.

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aster — a desktop environment in Lua</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: #1e2327;
+    color: #d8dee9;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 0;
+    box-sizing: border-box;
+  }
+  canvas {
+    border: 1px solid #3b4248;
+    outline: none;
+    image-rendering: pixelated;
+    max-width: 95vw;
+    height: auto;
+  }
+  p { max-width: 700px; text-align: center; margin: 0 8px; }
+  a { color: #ff5544; }
+  #status { font-size: 12px; color: #8b939b; }
+</style>
+</head>
+<body>
+  <canvas id="aster-canvas" width="1024" height="768"></canvas>
+  <p>
+    <strong>Aster</strong> — a desktop environment written in Lua, running here compiled to
+    WebAssembly, same code as every other backend. No <code>wm.lua</code> is configured yet in
+    this browser, so you're looking at the built-in fallback screen — there's no editor app
+    yet to write one from inside the demo itself.
+    <a href="https://github.com/Xelvra/aster-wm">Source</a>.
+  </p>
+  <p id="status">loading…</p>
+
+  <script src="glue.js"></script>
+  <script>
+    (async () => {
+      const status = document.getElementById("status");
+      const canvas = document.getElementById("aster-canvas");
+      try {
+        const aster = new Aster(canvas);
+        await aster.load("aster-wasm.wasm");
+        aster.init(1024, 768);
+        window.attachAsterInput(aster, canvas);
+        aster.boot();
+        aster.run();
+        canvas.focus();
+        status.textContent = "running";
+      } catch (e) {
+        status.textContent = "failed to start: " + (e.message || e);
+        console.error(e);
+      }
+    })();
+  </script>
+</body>
+</html>

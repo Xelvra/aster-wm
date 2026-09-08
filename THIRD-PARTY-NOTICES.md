@@ -31,6 +31,42 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+## musl `setjmp`/`longjmp` Wasm runtime
+
+Path: `src/backends/wasm/vendor/rt.c`
+Source: `musl/src/setjmp/wasm32/rt.c` (via Zig's bundled `wasi-libc`)
+License: MIT
+
+```
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+Vendored verbatim (spec/adr/013-wasm-backend-is-freestanding-with-a-vendored-sjlj-shim.md):
+the wasm backend targets `wasm32-freestanding`, not `wasm32-wasi`, so it has no `wasi-libc`
+to pull this file from at build time — the 83 lines implementing `__wasm_setjmp`/
+`__wasm_setjmp_test`/`__wasm_longjmp` (Lua's `pcall` floor) are compiled by our own
+`build.zig` step instead, with the exact flags ADR-013 confirms are needed
+(`-mexception-handling -mllvm -wasm-enable-sjlj -funwind-tables=2`).
+
 ## VGA 8x16 console font
 
 Path: `src/render/font_data.zig`

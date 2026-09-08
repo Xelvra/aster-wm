@@ -92,9 +92,9 @@ the only boundary in the whole system — Lua never touches anything below it.
 | Backend | What it gets you |
 |---|---|
 | **SDL3** | a window on Linux, macOS, or Windows |
-| **DRM/KMS + evdev** | *is* your desktop — boots straight to it, no X, no Wayland |
+| **DRM/KMS + evdev** | *is* your desktop — boots straight to it, no X, no Wayland — not built yet |
 | **WebAssembly** | the live demo above, in any browser |
-| **Bare metal** | boots on real hardware from a Limine ISO, no OS underneath |
+| **Bare metal** | boots on real hardware from a Limine ISO, no OS underneath — not built yet |
 
 A backend isn't "done" because someone says so — it's done when it passes the same
 [conformance suite](spec/conformance/) as every other one. Where a backend genuinely can't
