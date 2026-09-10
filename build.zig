@@ -26,19 +26,27 @@ fn configureCore(
     step.root_module.linkSystemLibrary("SDL3", .{});
     step.root_module.addOptions("build_options", build_options);
     step.root_module.addImport("embedded_font", font_mod);
+    // ADR-015: native builds embed the same Lua core the wasm backend
+    // already did, as the fallback searcher (src/host/modules.zig,
+    // registered LAST there) for a binary running outside its own
+    // checkout — see addEmbeddedLua's own comment for why @embedFile needs
+    // this module-mapping step at all.
+    addEmbeddedLua(b, step.root_module, &embedded_lua);
 }
 
-// The wasm backend has no filesystem (ADR-013), so the Lua it runs has to
-// be compiled into the binary. @embedFile only reaches files under the
-// directory holding its own module's root source file, and lua/, apps/ and
-// spec/conformance/ are siblings of src/ — so rather than a path, each
+// The wasm backend has no filesystem (ADR-013) and, per ADR-015, every
+// other backend needs the same Lua available as a fallback for a binary
+// running outside its own checkout — so the Lua core is compiled into
+// every binary. @embedFile only reaches files under the directory holding
+// its own module's root source file, and lua/, apps/, widgets/, themes/,
+// config/ and spec/conformance/ are siblings of src/ — so rather than a path, each
 // file is mapped into the module under its repo-relative name and
 // @embedFile'd by that name (ziglang/zig#14553: @embedFile resolves
 // module-mapped names the same way @import does). Not addEmbedPath, which
 // reads like the tool for exactly this and is a no-op for @embedFile on
 // Zig 0.16.0 — see B26 in spec/troubleshooting.md.
 //
-// The names are the paths, so the call sites (src/backends/wasm/modules.zig,
+// The names are the paths, so the call sites (src/host/modules.zig,
 // src/main_wasm.zig) still read as if they were embedding by path, and an
 // @embedFile of a name missing from these lists fails the build with
 // FileNotFound. The other direction is silent: a path listed here that
@@ -53,7 +61,26 @@ const embedded_lua = [_][]const u8{
     "lua/aster/loop.lua",
     "lua/aster/render.lua",
     "lua/aster/wm.lua",
+    "lua/aster/bar.lua",
+    "lua/aster/launcher.lua",
     "apps/hello-window.lua",
+    "apps/editor.lua",
+    "apps/plasma.lua",
+    "apps/snake.lua",
+    "apps/calculator.lua",
+    "apps/theme-switcher.lua",
+    "widgets/clock-widget.lua",
+    "widgets/workspace-widget.lua",
+    "widgets/active-window-widget.lua",
+    "widgets/sysmon-widget.lua",
+    "widgets/launcher-button.lua",
+    "themes/default.lua",
+    "themes/nord.lua",
+    "themes/catppuccin-mocha.lua",
+    "themes/gruvbox.lua",
+    // Not a package module (src/host/modules.zig doesn't register it as
+    // one) — the config seed ADR-015 writes to a fresh ~/.config/aster/.
+    "config/wm.lua",
 };
 
 const embedded_conformance = [_][]const u8{
@@ -285,6 +312,11 @@ pub fn build(b: *std.Build) void {
     // own header for the same principle applied to the line budget).
     const contract_boundary_cmd = b.addSystemCommand(&.{"tools/check-contract-boundary.sh"});
     const renderer_ignorance_cmd = b.addSystemCommand(&.{"tools/check-renderer-ignorance.sh"});
+    // Reads `git ls-files`, so it checks what a reader who CLONED the repo
+    // would get, not what happens to sit in the working tree — an untracked
+    // doc is missing for everyone but its author, which is the whole failure
+    // this guards against (see the script's own header, and ADR-016).
+    const dangling_refs_cmd = b.addSystemCommand(&.{"tools/check-no-dangling-refs.sh"});
 
     // The host contract is only enforced if something can fail the build
     // over it, not just prose describing it. This needs `aster-conformance`
@@ -294,6 +326,13 @@ pub fn build(b: *std.Build) void {
     // tools/conformance.sh's own comment on that distinction.
     const conformance_cmd = b.addSystemCommand(&.{ "tools/conformance.sh", "all" });
     conformance_cmd.step.dependOn(b.getInstallStep());
+
+    // ADR-015/A1: regression test for the binary only running from inside
+    // its own checkout. Needs the real `aster` on disk, not just built —
+    // same reasoning as conformance_cmd above.
+    const boot_elsewhere_cmd = b.addSystemCommand(&.{"tools/boot-from-elsewhere.sh"});
+    boot_elsewhere_cmd.addFileArg(exe.getEmittedBin());
+    boot_elsewhere_cmd.step.dependOn(b.getInstallStep());
 
     // tests/ui/ (spec/architecture.md's "Reload preserves state" and
     // "Windows and apps" sections): Lua modules against the fake
@@ -307,6 +346,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&budget_cmd.step);
     test_step.dependOn(&contract_boundary_cmd.step);
     test_step.dependOn(&renderer_ignorance_cmd.step);
+    test_step.dependOn(&dangling_refs_cmd.step);
     test_step.dependOn(&conformance_cmd.step);
     test_step.dependOn(&ui_tests_cmd.step);
+    test_step.dependOn(&boot_elsewhere_cmd.step);
 }

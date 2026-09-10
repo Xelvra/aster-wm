@@ -18,13 +18,17 @@ not in the document.
       │
       │  require("apps.*")
       ▼
-  apps/        editor, files, repl, and whatever you write
+  apps/        editor, and whatever you write
 ```
 
 ## Four rules
 
-**1. The host contract is the only boundary.** Lua calls nothing outside `host.*` and
-`require("aster.*")`. A backend never reaches into Lua state except through `aster.boot`,
+**1. The host contract is the only boundary.** Lua calls nothing outside `host.*`,
+`require("aster.*")`, and two infrastructure globals the host installs before boot —
+`__native_render` (the renderer core wraps, `lua/aster/render.lua`) and
+`__aster_default_config` (the seed config `lua/aster/loop.lua` falls back to) — a closed
+list, enforced by `tools/check-contract-boundary.sh`'s allow-list, not open to growth by
+convention. A backend never reaches into Lua state except through `aster.boot`,
 `aster.frame` and `aster.shutdown`. Break this and "mount it anywhere" stops being true,
 which is the only reason the project exists.
 
@@ -35,10 +39,12 @@ thing every future backend has to implement. Adding one is an ADR, not a commit.
 must never know what a window is. The moment the renderer knows about windows, the window
 manager is no longer in Lua and the project is dead.
 
-**4. Nothing you can see is hardcoded in Zig.** The bar, the window frame, the cursor, the
-launcher, the error bubble after a failed reload — all of it is drawn from Lua. Zig supplies
-rectangles and glyphs. If you catch yourself writing something in Zig that has a *shape*,
-you broke rule 3 before you noticed.
+**4. Nothing you can see is hardcoded in Zig.** The bar, the window frame, the launcher, the
+error bubble after a failed reload — all of it is drawn from Lua. Zig supplies rectangles and
+glyphs. If you catch yourself writing something in Zig that has a *shape*, you broke rule 3
+before you noticed. (A cursor isn't drawn by anything yet — SDL and the browser both supply
+their own; a backend that needs one drawn, like DRM/KMS, draws it from Lua too, the same as
+everything else here.)
 
 ## The host owns the loop
 
@@ -83,20 +89,37 @@ reload is triggered.
 ## Windows and apps
 
 A window has an integer `id`. The title is just an attribute — it can change, and two
-windows can share one. Workspaces are not implemented yet: every window is floating, and
-`wm:open` never assigns a workspace.
+windows can share one. Every window is floating — no tiling layout exists, and that is a
+stage rather than a verdict
+([ADR-016](adr/016-every-window-floats-tiling-is-deferred.md)). Every window does belong to
+a workspace (`win.ws`, defaulting to whichever workspace was current when
+`wm:open` created it) — `wm:goto_workspace(i)`/`wm:move_to_workspace(win, i)` switch and
+reassign it; `wm:render`/`wm:tick`/`wm:window_at` only see the current workspace's windows.
 
-An app is a table with a `draw` function and optional `key`, `text` and `tick` callbacks.
-The core never knows the name of any app, including the ones shipped in this repo; the
-editor, the file browser and the REPL are loaded by `config/wm.lua` exactly the way a
-third-party app is. Each app draws inside a clip rectangle, so a buggy app can't paint over
-its neighbours, and a crashing app closes its own window rather than the desktop.
+An app is a table with a `draw` function and optional `key`, `text`, `tick` and `click`
+callbacks. The core never knows the name of any app, including the ones shipped in this
+repo; the editor is loaded by `config/wm.lua` exactly the way a third-party app is. Each app
+draws inside a clip rectangle, so a buggy app can't paint over its neighbours, and a crashing
+app closes its own window rather than the desktop. That clip rectangle is the app's own full
+`win.x/y/w/h`, not inset for the frame drawn around it — the title bar and border
+(`lua/aster/wm.lua`'s `default_draw_frame`) are chrome painted over the app's content
+afterward, not a mask the renderer cuts the content to; there is no rounded-rect clip mask to
+cut one with. An app that needs the title bar out of its way (most do) offsets its own
+content by `theme.title_h + theme.border` — the core never insets the clip rect for it.
+`title_bar_rect`'s own bottom edge sits at `win.y + border + title_h`, so anything less
+leaves a strip where whatever's behind the window shows through (see B42 in
+`spec/troubleshooting.md`).
 
 Global keybindings are always checked before `app.key` — a window manager binding like
 `super+q` must work even inside a buggy or malicious app, the same way i3/sway/awesome grab
 their own shortcuts first. `app.key`'s return value is not consumed by anything. `app.key`
 only ever fires for `key_down`; the contract's `key_up` and `scroll` events reach
 `lua/aster/input.lua` but are not currently routed to any app.
+
+`app.click(win, x, y)` fires on a left click inside the window's content area (below the
+title bar, and only once focus, drag and close-button hit-testing have all had first refusal
+— `lua/aster/input.lua`'s `mouse_down` handler). Same discipline as `app.key`: optional,
+return value unused, a crash is caught by `wm:guard` and closes only that window.
 
 ## Typography
 

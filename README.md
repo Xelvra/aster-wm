@@ -22,10 +22,23 @@ windows still open.
 
 <br>
 
+<div align="center">
+
+![Editing wm.lua live, windows staying open](docs/media/live-edit.gif)
+
+Rewrite `draw_frame` and every window redraws with a new look, still holding what was in it:
+
+![Rewriting the window frame while windows stay open](docs/media/rewrite-frame.gif)
+
+</div>
+
+<br>
+
 ## Install
 
-Grab a binary from [Releases](https://github.com/Xelvra/aster-wm/releases) — Linux, macOS,
-Windows.
+Grab a binary from [Releases](https://github.com/Xelvra/aster-wm/releases) — Linux
+(`x86_64`, and `aarch64` if it builds) for now; macOS and Windows are open for someone with
+that machine to pick up.
 
 Building from source needs a system install of **SDL3** (`zig build`) and **Lua 5.4**
 (`lua5.4`, for `zig build test`'s `tests/ui/` suite):
@@ -53,14 +66,16 @@ Not a layer above it. Not a set of options it reads. The file itself.
 ```lua
 function wm:draw_frame(win, surface)
   local c = win.focused and self.theme.accent or self.theme.inactive
-  aster.render.round_rect(surface, win.x, win.y, win.w, win.h, 8, c)
+  aster.render.rect_border(surface, win.x, win.y, win.w, win.h, 4, c)
 end
 ```
 
-Change that function, hit `Ctrl+S`, and every window on screen redraws — right now, with no
-restart, no relog, no recompile. **Your windows stay open and keep their contents.** A typo
-doesn't cost you anything either: if the file doesn't compile, the previous version keeps
-running and you get told which line is wrong.
+Change that function in the built-in editor (`Super+Z`), hit `Ctrl+S`, and every window on
+screen redraws — right now, with no restart, no relog, no recompile. **Your windows stay
+open and keep their contents.** Prefer your own editor? Edit the file on disk and hit
+`Super+Shift+R` to reload immediately instead of waiting for the once-a-second watch to
+notice. A typo doesn't cost you anything either: if the file doesn't compile, the previous
+version keeps running and you get told which line is wrong.
 
 <br>
 
@@ -76,9 +91,9 @@ has to already be running before yours starts.
 **Pile two — toy WMs.** Framebuffer demos, osdev experiments. Genuinely hackable, but they
 don't do anything. They draw a rectangle and stop.
 
-Nothing sits between the two piles. aster does: a desktop with a tiling WM, a bar, a
-launcher, an editor, a file browser and a REPL — real work — whose core is under 1,600 lines
-of Lua you can read in an afternoon and rewrite in a weekend.
+Nothing sits between the two piles. aster does: a desktop with a bar, a launcher, a live
+editor, workspaces, themes — real work — whose core is under 1,600 lines of Lua you can read
+in an afternoon and rewrite in a weekend.
 
 That number is not a slogan. It's checked by CI on every push.
 
@@ -110,12 +125,12 @@ an interpreted language costs nothing and buys everything: the whole system stay
 at runtime.
 
 ```
-Zig   fill_rect · round_rect · rect_border · gradient_border · glyph · blit · clip
-Lua   wm · bar · launcher · input · editor · files · repl · your apps
+Zig   fill_rect · round_rect · rect_border · gradient_border · glyph · clip
+Lua   wm · bar · launcher · input · editor · your apps
 ```
 
-The renderer never knows what a window is. It draws rectangles and glyphs — windows, tiling,
-focus, all of it is composed in Lua, on top.
+The renderer never knows what a window is. It draws rectangles and glyphs — windows, focus,
+workspaces, all of it is composed in Lua, on top.
 
 <br>
 
@@ -150,10 +165,6 @@ aster started as [`aster-os`](https://github.com/Xelvra/aster-os), an experiment
 written in Zig — boot, memory management, APIC, a filesystem, a Lua desktop running on bare
 metal. The OS taught what it needed to teach. The desktop it produced turned out to be the
 interesting part, so the kernel became backend #4 instead of the foundation.
-
-<br>
-
-## And yes, it boots without an OS at all
 
 <br>
 

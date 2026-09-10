@@ -1,7 +1,10 @@
 -- tests/ui/reload_resets_theme.lua — ADR-003 names theme among what a
 -- config reload must reset (alongside keybindings, drawing method
 -- overrides, bar widgets): removing an override from the config must
--- actually remove its effect, not leave the last-seen value stuck.
+-- actually remove its effect, not leave the last-seen value stuck. Since
+-- D4 unified theme defaults (lua/aster/wm.lua's default_theme), "removed"
+-- means "back to the default", not "nil" — every theme key always has a
+-- real value now, default or overridden.
 
 package.path = "lua/?.lua;lua/?/init.lua;./?.lua;./?/init.lua;" .. package.path
 local fake = require("tests.ui.fakehost")
@@ -35,6 +38,8 @@ return aster.wm.adopt {}
 aster.reload()
 
 assert(count(aster.state.wm.keybindings) == 0, "removing a keybinding from the config must remove it")
-assert(aster.state.wm.theme.accent == nil, "removing a theme override from the config must remove it, not leave it stuck")
+local aster_wm = require("aster.wm")
+assert(aster.state.wm.theme.accent == aster_wm.default_theme.accent,
+  "removing a theme override from the config must fall back to the default, not leave the old override stuck")
 
 print("reload_resets_theme: PASS")

@@ -60,6 +60,22 @@
   // Every path is one localStorage entry, prefixed so aster's own keys
   // don't collide with anything else on the page's origin.
   function localStorageStore() {
+    // localStorage itself has no mtime concept, so one is tracked here,
+    // in memory, keyed by path. Only set()/remove() advance it — a path
+    // read but never written this session gets a stable (not wall-clock)
+    // mtime the first time it's asked for, since loop.lua's external-edit
+    // watch (spec/architecture.md "Reload preserves state") compares this
+    // value across ticks for *equality*, not absolute time: returning
+    // Date.now() here instead made every list() call report a "changed"
+    // file, forcing a reload on essentially every animation frame (B38).
+    const mtimes = new Map();
+    function touch(path) {
+      mtimes.set(path, Math.floor(Date.now() / 1000));
+    }
+    function mtimeOf(path) {
+      if (!mtimes.has(path)) mtimes.set(path, 0);
+      return mtimes.get(path);
+    }
     return {
       get(path) {
         const v = localStorage.getItem(STORAGE_PREFIX + path);
@@ -67,10 +83,12 @@
       },
       set(path, bytes) {
         localStorage.setItem(STORAGE_PREFIX + path, bytesToStore(bytes));
+        touch(path);
       },
       remove(path) {
         const had = localStorage.getItem(STORAGE_PREFIX + path) !== null;
         localStorage.removeItem(STORAGE_PREFIX + path);
+        mtimes.delete(path);
         return had;
       },
       // `dir` has no trailing slash (host.list's contract); entries come
@@ -83,6 +101,9 @@
           if (k.startsWith(dirPrefix)) out.push(k.slice(dirPrefix.length));
         }
         return out;
+      },
+      mtime(path) {
+        return mtimeOf(path);
       },
     };
   }
@@ -165,9 +186,10 @@
         new Uint8Array(mem(), nameOutPtr, bytes.length).set(bytes);
         const view = new DataView(mem());
         view.setInt32(isDirOutPtr, 0, true);
-        const value = env.store.get(dir + "/" + name);
+        const entryPath = dir + "/" + name;
+        const value = env.store.get(entryPath);
         view.setBigInt64(sizeOutPtr, BigInt(value === null ? 0 : value.length), true);
-        view.setBigInt64(mtimeOutPtr, BigInt(Math.floor(Date.now() / 1000)), true);
+        view.setBigInt64(mtimeOutPtr, BigInt(env.store.mtime(entryPath)), true);
         return bytes.length;
       },
       js_fs_remove: (pathPtr, pathLen) => {
@@ -336,28 +358,65 @@
   // split out from Aster itself so a caller with an unusual input setup
   // (the conformance runner, say) can skip it and drive events directly.
   function attachInput(aster, canvas) {
-    canvas.tabIndex = 0; // focusable, so it actually receives key events
+    // A <canvas> can never receive `beforeinput` — that event is part of
+    // the InputEvent spec's editing-host contract (a real <input>/
+    // <textarea>/contenteditable element), not something a focusable-but-
+    // otherwise-plain element gets no matter how the keypress arrives,
+    // real hardware or synthetic. Confirmed empirically: canvas.tabIndex=0
+    // plus a focused canvas still fires zero beforeinput events. See B37
+    // in spec/troubleshooting.md. Keyboard focus (and so keydown/keyup/
+    // beforeinput/focus/blur) therefore lives on this invisible <input>
+    // instead — the canvas keeps only the mouse listeners and its own
+    // pixels; nothing about what the page LOOKS like changes.
+    const keyboardProxy = document.createElement("input");
+    keyboardProxy.type = "text";
+    keyboardProxy.autocomplete = "off";
+    keyboardProxy.spellcheck = false;
+    keyboardProxy.setAttribute("aria-hidden", "true");
+    Object.assign(keyboardProxy.style, {
+      position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+      opacity: "0", border: "0", padding: "0", pointerEvents: "none",
+    });
+    (canvas.parentNode || document.body).insertBefore(keyboardProxy, canvas.nextSibling);
+    canvas.tabIndex = 0; // canvas.focus() (index.html) still works — it just redirects, below
     let lastX = 0, lastY = 0;
 
     function modsOf(e) {
       return { ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, super: e.metaKey };
     }
 
-    canvas.addEventListener("keydown", (e) => {
+    // No unconditional e.preventDefault() here (unlike the old canvas
+    // listener this replaced): on a real <input>, preventing keydown's
+    // default action also suppresses the browser's own character-
+    // insertion step for that keystroke — which is exactly the step
+    // `beforeinput` below depends on. Only suppressed for a
+    // modifier-decorated keystroke (Ctrl+S, Super+Z, a global
+    // keybinding's own combo): those aren't meant to type a character at
+    // all, and on at least one tested environment a held Super (mapped
+    // from OS "Meta") didn't fully suppress the browser's own text
+    // composition, leaking the plain letter into the buffer alongside the
+    // keybinding firing.
+    keyboardProxy.addEventListener("keydown", (e) => {
       if (e.repeat) return;
       aster.pushKeyDown(e.code, modsOf(e));
-      e.preventDefault();
+      if (e.ctrlKey || e.altKey || e.metaKey) e.preventDefault();
     });
-    canvas.addEventListener("keyup", (e) => {
+    keyboardProxy.addEventListener("keyup", (e) => {
       aster.pushKeyUp(e.code, modsOf(e));
-      e.preventDefault();
     });
     // `text`, not `key_down`, carries typed characters (spec/keys.md:
     // "keys are not text") — beforeinput's `.data` is already
     // post-layout/IME, exactly what the contract wants.
-    canvas.addEventListener("beforeinput", (e) => {
+    keyboardProxy.addEventListener("beforeinput", (e) => {
       if (e.data) aster.pushText(e.data);
     });
+    // The proxy's own value is never meant to hold anything — clear it
+    // after every edit (a typed char, an IME commit, ...) so it can't
+    // grow without bound or get out of sync with anything.
+    keyboardProxy.addEventListener("input", () => { keyboardProxy.value = ""; });
+    keyboardProxy.addEventListener("focus", () => aster.pushFocus(true));
+    keyboardProxy.addEventListener("blur", () => aster.pushFocus(false));
+    canvas.addEventListener("focus", () => keyboardProxy.focus());
 
     canvas.addEventListener("mousemove", (e) => {
       const r = canvas.getBoundingClientRect();
@@ -368,7 +427,7 @@
       lastY = y;
     });
     canvas.addEventListener("mousedown", (e) => {
-      canvas.focus();
+      keyboardProxy.focus();
       const r = canvas.getBoundingClientRect();
       aster.pushMouseDown(Math.round(e.clientX - r.left), Math.round(e.clientY - r.top), e.button);
     });
@@ -385,8 +444,6 @@
       e.preventDefault();
     }, { passive: false });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-    canvas.addEventListener("focus", () => aster.pushFocus(true));
-    canvas.addEventListener("blur", () => aster.pushFocus(false));
 
     // The browser's analog of SDL_EVENT_QUIT (the window's close button):
     // the tab is going away, with no guarantee run()'s next

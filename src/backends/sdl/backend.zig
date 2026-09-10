@@ -79,9 +79,17 @@ pub const Sdl = struct {
         };
     }
 
+    // A resize that fails to allocate is not a reason to take the whole
+    // desktop down (see B33 in spec/troubleshooting.md): the new surface is
+    // built before the old one is torn down, so a failed allocation just
+    // leaves the previous frame on screen at its old size.
     pub fn resize(self: *Sdl, w: u32, h: u32) void {
+        const new_surface = c.SDL_CreateSurface(@intCast(w), @intCast(h), c.SDL_PIXELFORMAT_XRGB8888) orelse {
+            fs.log("resize: SDL_CreateSurface failed, keeping the previous surface");
+            return;
+        };
         c.SDL_DestroySurface(self.pixel_surface);
-        self.pixel_surface = c.SDL_CreateSurface(@intCast(w), @intCast(h), c.SDL_PIXELFORMAT_XRGB8888).?;
+        self.pixel_surface = new_surface;
         self.rebuildSurface();
     }
 
@@ -297,11 +305,12 @@ pub const Sdl = struct {
         };
     }
 
-    // Called by main.zig's loop after a frame that returned "idle" — blocks
-    // the whole process until an event is available (see B6 in
-    // spec/troubleshooting.md for why this must not just dequeue-and-drop).
-    // `SDL_WaitEventTimeout(NULL, ms)` waits but leaves the event in SDL's
-    // own queue for the next `wait()` call to pick up normally.
+    // Called by main.zig's loop both after an "idle" frame (see B6 in
+    // spec/troubleshooting.md for why this must not just dequeue-and-drop)
+    // and, with a shorter timeout, to pace a "running" frame to ~60fps (see
+    // B34) without adding input latency. `SDL_WaitEventTimeout(NULL, ms)`
+    // waits but leaves the event in SDL's own queue for the next `wait()`
+    // call to pick up normally.
     pub fn idleWait(self: *Sdl, timeout_ms: u32) void {
         if (self.pending_len > 0) return;
         _ = c.SDL_WaitEventTimeout(null, @intCast(timeout_ms));

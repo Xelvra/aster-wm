@@ -9,6 +9,16 @@
 
 local M = {}
 
+-- ADR-015: src/host/lua.zig pushes this global from the embedded
+-- config/wm.lua on every real backend (src/host/modules.zig's
+-- pushDefaultConfig); a minimal stand-in is enough here since tests/ui/
+-- only checks that loop.lua's M.boot() writes *something* when no config
+-- exists yet, never that it matches the shipped config/wm.lua verbatim.
+_G.__aster_default_config = [[
+local aster = require("aster")
+return aster.wm.adopt {}
+]]
+
 -- ---- in-memory "filesystem" ------------------------------------------
 
 local fs = {} -- path -> { data = string, mtime = number }
@@ -98,7 +108,7 @@ local SURFACE_MT = {}
 
 _G.host = {
   info = function() return info end,
-  surface = function() return setmetatable({}, SURFACE_MT) end, -- opaque; tests/ui/ never draws pixels
+  surface = function() return setmetatable({ _clip_depth = 0 }, SURFACE_MT) end, -- opaque; tests/ui/ never draws pixels
   present = function() end,
   wait = function(_timeout_ms)
     return table.remove(events, 1)
@@ -220,18 +230,28 @@ local function checku32(name, argn, v)
   end
 end
 
+-- Mirrors src/host/bindings.zig's optAlpha — an optional trailing 0-255
+-- argument, defaulting to opaque (255) when omitted.
+local function checkalpha(name, argn, v)
+  if v == nil then return end
+  if type(v) ~= "number" or v % 1 ~= 0 or v < 0 or v > 255 then
+    error("bad argument #" .. argn .. " to '" .. name .. "' (alpha must be 0-255)", 3)
+  end
+end
+
 _G.__native_render = {
-  fill_rect = function(s, x, y, w, h, color)
+  fill_rect = function(s, x, y, w, h, color, alpha)
     checksurface("fill_rect", 1, s)
     checki32("fill_rect", 2, x); checki32("fill_rect", 3, y)
     checku32("fill_rect", 4, w); checku32("fill_rect", 5, h)
-    checku32("fill_rect", 6, color)
+    checku32("fill_rect", 6, color); checkalpha("fill_rect", 7, alpha)
   end,
-  round_rect = function(s, x, y, w, h, r, color)
+  round_rect = function(s, x, y, w, h, r, color, alpha)
     checksurface("round_rect", 1, s)
     checki32("round_rect", 2, x); checki32("round_rect", 3, y)
     checku32("round_rect", 4, w); checku32("round_rect", 5, h)
     checku32("round_rect", 6, r); checku32("round_rect", 7, color)
+    checkalpha("round_rect", 8, alpha)
   end,
   rect_border = function(s, x, y, w, h, thickness, color)
     checksurface("rect_border", 1, s)
@@ -246,11 +266,6 @@ _G.__native_render = {
     checku32("gradient_border", 6, thickness)
     checku32("gradient_border", 7, color1); checku32("gradient_border", 8, color2)
   end,
-  blit = function(s, src, x, y)
-    checksurface("blit", 1, s)
-    checksurface("blit", 2, src)
-    checki32("blit", 3, x); checki32("blit", 4, y)
-  end,
   glyph = function(s, x, y, row, color)
     checksurface("glyph", 1, s)
     checki32("glyph", 2, x); checki32("glyph", 3, y)
@@ -263,12 +278,30 @@ _G.__native_render = {
   end,
   text_width = function(str) checkstr("text_width", 1, str); return utf8_len(str) * 8 end,
   line_height = function() return 16 end,
+  -- Mirrors src/render/surface.zig's max_clip_depth so a test that pushes
+  -- past it here behaves the way it would against the real renderer.
   push_clip = function(s, x, y, w, h)
     checksurface("push_clip", 1, s)
     checki32("push_clip", 2, x); checki32("push_clip", 3, y)
     checku32("push_clip", 4, w); checku32("push_clip", 5, h)
+    if s._clip_depth < 8 then s._clip_depth = s._clip_depth + 1 end
   end,
-  pop_clip = function(s) checksurface("pop_clip", 1, s) end,
+  pop_clip = function(s)
+    checksurface("pop_clip", 1, s)
+    if s._clip_depth > 0 then s._clip_depth = s._clip_depth - 1 end
+  end,
+  -- clip_depth/restore_clip (see B32 in spec/troubleshooting.md): a
+  -- reference model of src/render/surface.zig's Surface.restoreClip, used
+  -- by lua/aster/render.lua's `clipped` to self-heal an unbalanced fn.
+  clip_depth = function(s)
+    checksurface("clip_depth", 1, s)
+    return s._clip_depth
+  end,
+  restore_clip = function(s, depth)
+    checksurface("restore_clip", 1, s)
+    checku32("restore_clip", 2, depth)
+    if depth < s._clip_depth then s._clip_depth = depth end
+  end,
   get_pixel = function(s, x, y)
     checksurface("get_pixel", 1, s)
     checki32("get_pixel", 2, x); checki32("get_pixel", 3, y)

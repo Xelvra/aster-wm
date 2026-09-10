@@ -12,6 +12,7 @@ pub const c = @cImport({
 const bindings = @import("bindings.zig");
 const host_mod = @import("host.zig");
 const fs = @import("fs.zig");
+const modules = @import("modules.zig");
 
 pub const State = struct {
     L: *c.lua_State,
@@ -38,18 +39,18 @@ pub const State = struct {
         // package.path: lua/aster modules, then apps/themes/config relative
         // to the working directory the binary was launched from. Dead
         // weight on the wasm backend (no real filesystem to search — see
-        // vendor/stdio.h) but harmless: the searcher below is tried first.
+        // vendor/stdio.h) but harmless: modules.zig's searcher runs first
+        // there anyway, so this path is never even consulted.
         _ = c.lua_getglobal(L, "package");
         _ = c.lua_pushstring(L, "lua/?.lua;lua/?/init.lua;./?.lua;./?/init.lua");
         c.lua_setfield(L, -2, "path");
         c.lua_pop(L, 1);
 
-        // The wasm backend has no filesystem for loadlib.c's normal
-        // Lua-file searcher to find anything in — see
-        // src/backends/wasm/modules.zig's header comment.
-        if (comptime builtin.target.cpu.arch.isWasm()) {
-            @import("../backends/wasm/modules.zig").register(L);
-        }
+        // ADR-015: every backend gets the embedded-Lua searcher, ordered so
+        // a real file on disk (a developer's checkout) always wins where
+        // one can exist at all — see modules.zig's header comment.
+        modules.register(L, if (comptime builtin.target.cpu.arch.isWasm()) .first else .last);
+        modules.pushDefaultConfig(L);
 
         return .{ .L = L };
     }

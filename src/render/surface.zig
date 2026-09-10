@@ -57,6 +57,18 @@ pub const Surface = struct {
         self.clip = self.clip_stack[self.clip_depth];
     }
 
+    pub fn clipDepth(self: *const Surface) u8 {
+        return self.clip_depth;
+    }
+
+    // Unwinds the clip stack back to `depth`, one popClip() at a time — see
+    // B32 in spec/troubleshooting.md. `depth` greater than or equal to the
+    // current depth is a no-op: this only ever pops, it can't fabricate
+    // pushes that were never made.
+    pub fn restoreClip(self: *Surface, depth: u32) void {
+        while (@as(u32, self.clip_depth) > depth) self.popClip();
+    }
+
     pub inline fn setPixel(self: *Surface, x: i32, y: i32, color: u32) void {
         if (x < self.clip.x or y < self.clip.y) return;
         if (x >= self.clip.x + @as(i32, @intCast(self.clip.w))) return;

@@ -15,7 +15,7 @@
 //! only used by the SDL backend's conformance-script runner
 //! (src/host/lua.zig's `runScript`) and `require`'s file searcher — the
 //! wasm backend replaces both with an embedded-module package searcher
-//! (src/backends/wasm/modules.zig), so these are stubs that always fail,
+//! (src/host/modules.zig), so these are stubs that always fail,
 //! never load-bearing.
 
 const std = @import("std");
@@ -251,32 +251,138 @@ export fn floor(x: f64) callconv(.c) f64 {
 export fn ceil(x: f64) callconv(.c) f64 {
     return @ceil(x);
 }
+// fmod/pow/exp/log/log2/log10/sin/cos/tan are hand-rolled below instead of
+// going through Zig's @rem/@exp/@log*/@sin/@cos/@tan builtins (and
+// std.math.pow/tan, which reduce to the same builtins internally) — see
+// B39 in spec/troubleshooting.md. On this freestanding wasm target f64
+// transcendentals have no native instruction, so those builtins lower to a
+// runtime call to a libm symbol of the *same name* this file exports
+// (compiler_rt/sin.zig, for instance, also exports "sin") — this file's
+// own `export fn sin` then IS that symbol, so `@sin(x)` inside it calls
+// itself, forever. sqrt/fabs/floor/ceil/trunc stay on builtins (real wasm
+// instructions, no runtime call, no collision); asin/acos/atan/atan2/
+// ldexp/frexp below are untouched because std.math's implementations of
+// those are genuine self-contained algorithms, not builtin wrappers.
+fn fmodImpl(x: f64, y: f64) f64 {
+    if (y == 0 or !std.math.isFinite(x) or std.math.isNan(y)) return std.math.nan(f64);
+    return x - @trunc(x / y) * y;
+}
 export fn fmod(x: f64, y: f64) callconv(.c) f64 {
-    return @rem(x, y);
+    return fmodImpl(x, y);
 }
-export fn pow(x: f64, y: f64) callconv(.c) f64 {
-    return std.math.pow(f64, x, y);
+
+const two_pi: f64 = 6.283185307179586476925286766559;
+const ln2: f64 = 0.6931471805599453094172321214582;
+
+// sin/cos Maclaurin series, valid on the [-pi, pi] range reduceRange below
+// always produces — plenty of terms for that bounded range to land well
+// under Lua-script-visible precision (game/UI math, not scientific
+// computing — ADR-013 bounds this whole shim by what Lua 5.4 actually
+// calls, not by what a general-purpose libc would owe a caller).
+fn reduceRange(x: f64) f64 {
+    const k = @floor(x / two_pi + 0.5);
+    return x - k * two_pi;
 }
-export fn exp(x: f64) callconv(.c) f64 {
-    return @exp(x);
+fn sinPoly(r: f64) f64 {
+    const r2 = r * r;
+    return r * (1.0 + r2 * (-1.0 / 6.0 + r2 * (1.0 / 120.0 + r2 * (-1.0 / 5040.0 +
+        r2 * (1.0 / 362880.0 + r2 * (-1.0 / 39916800.0 + r2 * (1.0 / 6227020800.0)))))));
 }
-export fn log(x: f64) callconv(.c) f64 {
-    return @log(x);
-}
-export fn log2(x: f64) callconv(.c) f64 {
-    return @log2(x);
-}
-export fn log10(x: f64) callconv(.c) f64 {
-    return @log10(x);
+fn cosPoly(r: f64) f64 {
+    const r2 = r * r;
+    return 1.0 + r2 * (-1.0 / 2.0 + r2 * (1.0 / 24.0 + r2 * (-1.0 / 720.0 +
+        r2 * (1.0 / 40320.0 + r2 * (-1.0 / 3628800.0 + r2 * (1.0 / 479001600.0))))));
 }
 export fn sin(x: f64) callconv(.c) f64 {
-    return @sin(x);
+    return sinPoly(reduceRange(x));
 }
 export fn cos(x: f64) callconv(.c) f64 {
-    return @cos(x);
+    return cosPoly(reduceRange(x));
 }
 export fn tan(x: f64) callconv(.c) f64 {
-    return std.math.tan(x);
+    const r = reduceRange(x);
+    return sinPoly(r) / cosPoly(r);
+}
+
+// e^x via range reduction to a small remainder (|r| <= ln2/2, where the
+// Taylor series below converges fast) times an exact power of two, scaled
+// back with ldexp's bit manipulation (below, already collision-free)
+// instead of another builtin.
+fn expImpl(x: f64) f64 {
+    const k = @floor(x / ln2 + 0.5);
+    const r = x - k * ln2;
+    const er = 1.0 + r * (1.0 + r * (1.0 / 2.0 + r * (1.0 / 6.0 + r * (1.0 / 24.0 +
+        r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0)))))));
+    return std.math.ldexp(er, @intFromFloat(k));
+}
+export fn exp(x: f64) callconv(.c) f64 {
+    return expImpl(x);
+}
+
+// ln(x) via frexp's bit-exact x = m * 2^e (m in [0.5, 1), also collision-
+// free below) plus an artanh-style series for ln(m): y = (m-1)/(m+1) stays
+// in [-1/3, 0) over that whole range, so the series converges quickly.
+fn lnImpl(x: f64) f64 {
+    if (x < 0 or std.math.isNan(x)) return std.math.nan(f64);
+    if (x == 0) return -std.math.inf(f64);
+    const fr = std.math.frexp(x);
+    const m = fr.significand;
+    const e: f64 = @floatFromInt(fr.exponent);
+    const y = (m - 1.0) / (m + 1.0);
+    const y2 = y * y;
+    const series = y * (2.0 + y2 * (2.0 / 3.0 + y2 * (2.0 / 5.0 + y2 * (2.0 / 7.0 +
+        y2 * (2.0 / 9.0 + y2 * (2.0 / 11.0))))));
+    return e * ln2 + series;
+}
+export fn log(x: f64) callconv(.c) f64 {
+    return lnImpl(x);
+}
+export fn log2(x: f64) callconv(.c) f64 {
+    return lnImpl(x) / ln2;
+}
+export fn log10(x: f64) callconv(.c) f64 {
+    const ln10: f64 = 2.302585092994045684017991454684;
+    return lnImpl(x) / ln10;
+}
+
+// pow(x, y) = e^(y * ln x) for x > 0, via this file's own exp/ln above —
+// std.math.pow takes the same path internally (@exp/@log) for non-integer
+// exponents, so it inherits the same collision this whole block exists to
+// avoid. Negative x is only defined for an integer y (odd/even decides
+// the sign); x == 0 and y == 0 are the usual C pow() special cases.
+// Exact binary exponentiation for an integer exponent (matches every
+// caller this shim actually sees: Lua's `^` operator always goes through
+// C pow(), including for things that read as plain integers like `2^40`
+// — spec/conformance/04_events.lua exercises exactly that. The transcendental
+// path below (exp(y*ln x)) is an approximation good to a handful of ULPs,
+// nowhere near exact enough for host.wait() et al.'s strict
+// lua_numbertointeger check on the result).
+fn powInt(base: f64, n: i64) f64 {
+    var b = base;
+    var e = n;
+    var neg_exp = false;
+    if (e < 0) {
+        neg_exp = true;
+        e = -e;
+    }
+    var result: f64 = 1.0;
+    while (e > 0) : (e >>= 1) {
+        if (e & 1 != 0) result *= b;
+        b *= b;
+    }
+    return if (neg_exp) 1.0 / result else result;
+}
+
+fn powImpl(x: f64, y: f64) f64 {
+    if (y == 0) return 1.0;
+    if (x == 0) return if (y > 0) 0.0 else std.math.inf(f64);
+    const yi = @floor(y);
+    if (yi == y and @abs(y) < 1e15) return powInt(x, @intFromFloat(y));
+    if (x < 0) return std.math.nan(f64); // non-integer exponent of a negative base
+    return expImpl(y * lnImpl(x));
+}
+export fn pow(x: f64, y: f64) callconv(.c) f64 {
+    return powImpl(x, y);
 }
 export fn asin(x: f64) callconv(.c) f64 {
     return std.math.asin(x);
@@ -360,7 +466,17 @@ export fn strtod(s: [*:0]const u8, endptr_out: ?*?[*:0]const u8) callconv(.c) f6
         }
     }
     var result: f64 = @floatFromInt(mantissa);
-    result *= pow(10, @floatFromInt(exp10));
+    // Repeated *10/10 instead of pow(10, exp10): exact for the small
+    // integer exponents plain decimal literals produce, and doesn't lean
+    // on this file's own approximate transcendental pow() (below) for
+    // something an integer loop does exactly anyway.
+    if (exp10 > 0) {
+        var n = exp10;
+        while (n > 0) : (n -= 1) result *= 10;
+    } else if (exp10 < 0) {
+        var n = -exp10;
+        while (n > 0) : (n -= 1) result /= 10;
+    }
     if (neg) result = -result;
     if (endptr_out) |eo| eo.* = s + i;
     return result;

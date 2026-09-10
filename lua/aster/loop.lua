@@ -20,12 +20,33 @@ local function config_mtime()
   return nil
 end
 
+-- ADR-015: a fresh install (native, or the wasm demo's localStorage) has
+-- no ~/.config/aster/wm.lua yet, so before the very first reload(), write
+-- the embedded default there — once, here, not inside reload() itself, so
+-- it never fights ADR-003's rollback protocol or the reload_* tests, and
+-- never re-seeds a file the user deliberately deleted (M.boot() only ever
+-- runs once, at process start). __aster_default_config is pushed once by
+-- src/host/lua.zig (modules.zig's pushDefaultConfig) — not a host.*
+-- function (P2 stays twelve), the same kind of second infrastructure
+-- global __native_render already is.
+local function seed_config_if_missing(path)
+  local existing, err = host.read(path)
+  if existing or err ~= "not_found" then return end
+  local ok, werr = host.write(path, __aster_default_config)
+  if ok then
+    aster.log("seeded default config at " .. path)
+  else
+    aster.log("could not seed default config at " .. path .. ": " .. tostring(werr))
+  end
+end
+
 function M.boot()
   aster.state = aster.state or {
-    windows = {}, next_id = 1, next_z = 1, workspaces = {}, focus = nil,
+    windows = {}, next_id = 1, next_z = 1, workspaces = {}, current_ws = 1, focus = nil,
     wm = nil, config_src = nil, info = nil, last_mtime = nil,
   }
   aster.state.info = host.info()
+  seed_config_if_missing(aster.state.info.paths.config .. "/wm.lua")
   aster.reload() -- loads config/wm.lua; falls back to the built-in default
   aster.state.last_mtime = config_mtime()
 end

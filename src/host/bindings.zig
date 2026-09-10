@@ -65,6 +65,19 @@ fn checkU32(L: *c.lua_State, idx: c_int) u32 {
     return @intCast(v);
 }
 
+// `host` is a global table reachable from any app's Lua exactly like
+// __native_render is — see B31 in spec/troubleshooting.md. optI32 is the
+// host.* counterpart of checkI32 for arguments that are optional
+// (luaL_optinteger's default is used when the argument is absent).
+fn optI32(L: *c.lua_State, idx: c_int, default: i32) i32 {
+    const v = c.luaL_optinteger(L, idx, default);
+    if (v < std.math.minInt(i32) or v > std.math.maxInt(i32)) {
+        _ = c.luaL_argerror(L, idx, "value does not fit in a 32-bit coordinate");
+        unreachable;
+    }
+    return @intCast(v);
+}
+
 // ---- host.* -----------------------------------------------------------
 
 fn lInfo(L: ?*c.lua_State) callconv(.c) c_int {
@@ -244,7 +257,7 @@ fn pushEvent(st: *c.lua_State, ev: host_mod.Event) void {
 
 fn lWait(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
-    const timeout: i32 = @intCast(c.luaL_optinteger(st, 1, 0));
+    const timeout: i32 = optI32(st, 1, 0);
     const ev = active_backend.wait(timeout) orelse {
         c.lua_pushnil(st);
         return 1;
@@ -448,17 +461,31 @@ fn colorArg(L: *c.lua_State, idx: c_int) u32 {
     return checkU32(L, idx);
 }
 
+// An optional trailing alpha argument (0-255, default 255 — opaque, so
+// every existing fill_rect/round_rect call site is unaffected).
+// Not colorArg's high byte: colorArg is checkU32, so a 0xAARRGGBB value
+// would silently pass through and then get its alpha byte discarded by
+// pack() — an explicit argument can't be lost that way.
+fn optAlpha(L: *c.lua_State, idx: c_int) u8 {
+    const v = c.luaL_optinteger(L, idx, 255);
+    if (v < 0 or v > 255) {
+        _ = c.luaL_argerror(L, idx, "alpha must be 0-255");
+        unreachable;
+    }
+    return @intCast(v);
+}
+
 fn nFillRect(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.fillRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), colorArg(st, 6));
+    renderer.fillRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), colorArg(st, 6), optAlpha(st, 7));
     return 0;
 }
 
 fn nRoundRect(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
-    renderer.roundRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7));
+    renderer.roundRect(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7), optAlpha(st, 8));
     return 0;
 }
 
@@ -473,14 +500,6 @@ fn nGradientBorder(L: ?*c.lua_State) callconv(.c) c_int {
     const st = L.?;
     const s = surfaceArg(st, 1);
     renderer.gradientBorder(s, checkI32(st, 2), checkI32(st, 3), checkU32(st, 4), checkU32(st, 5), checkU32(st, 6), colorArg(st, 7), colorArg(st, 8));
-    return 0;
-}
-
-fn nBlit(L: ?*c.lua_State) callconv(.c) c_int {
-    const st = L.?;
-    const s = surfaceArg(st, 1);
-    const src = surfaceArg(st, 2);
-    renderer.blit(s, src, checkI32(st, 3), checkI32(st, 4));
     return 0;
 }
 
@@ -531,6 +550,24 @@ fn nPopClip(L: ?*c.lua_State) callconv(.c) c_int {
     return 0;
 }
 
+// clip_depth/restore_clip let lua/aster/render.lua's `clipped` guarantee the
+// clip stack is back to where it found it once `fn` returns, even if `fn`
+// itself called push_clip/pop_clip an unbalanced number of times — see B32
+// in spec/troubleshooting.md.
+fn nClipDepth(L: ?*c.lua_State) callconv(.c) c_int {
+    const st = L.?;
+    const s = surfaceArg(st, 1);
+    c.lua_pushinteger(st, s.clipDepth());
+    return 1;
+}
+
+fn nRestoreClip(L: ?*c.lua_State) callconv(.c) c_int {
+    const st = L.?;
+    const s = surfaceArg(st, 1);
+    s.restoreClip(checkU32(st, 2));
+    return 0;
+}
+
 // Not part of the drawing API a theme or app ever needs — read-back exists
 // purely so spec/conformance/02_surface.lua can verify a write landed.
 fn nGetPixel(L: ?*c.lua_State) callconv(.c) c_int {
@@ -573,13 +610,14 @@ pub fn register(L: *c.lua_State, backend: host_mod.Backend, gpa: std.mem.Allocat
         .{ .name = "round_rect", .func = nRoundRect },
         .{ .name = "rect_border", .func = nRectBorder },
         .{ .name = "gradient_border", .func = nGradientBorder },
-        .{ .name = "blit", .func = nBlit },
         .{ .name = "glyph", .func = nGlyph },
         .{ .name = "text", .func = nText },
         .{ .name = "text_width", .func = nTextWidth },
         .{ .name = "line_height", .func = nLineHeight },
         .{ .name = "push_clip", .func = nPushClip },
         .{ .name = "pop_clip", .func = nPopClip },
+        .{ .name = "clip_depth", .func = nClipDepth },
+        .{ .name = "restore_clip", .func = nRestoreClip },
         .{ .name = "get_pixel", .func = nGetPixel },
         .{ .name = null, .func = null },
     };

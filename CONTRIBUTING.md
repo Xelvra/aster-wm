@@ -9,7 +9,7 @@ Almost everything a first-time contributor wants to do lives in `config/wm.lua`,
 `lua/aster/`. You don't need to know Zig, and you don't need to understand the host contract,
 to send a useful PR.
 
-- Want a new look? → [`config/wm.lua`](config/wm.lua), set `wm.theme`
+- Want a new look? → [`themes/`](themes/), or [`config/wm.lua`](config/wm.lua) to pick one
 - Want to build something on top? → [`apps/`](apps/), start with
   [`apps/hello-window.lua`](apps/hello-window.lua) (30 lines)
 - Want to fix WM behavior? → [`lua/aster/`](lua/aster/)
@@ -44,12 +44,15 @@ the case.
 
 ## Adding a theme
 
-A theme is just [`config/wm.lua`](config/wm.lua) setting `wm.theme` and, optionally,
-overriding drawing functions like `draw_frame`. No build step, no separate file to point at
-— edit `wm.theme` in place, `Ctrl+S`.
+A theme is a file in [`themes/`](themes/) that returns a table of color overrides — any key
+it doesn't set falls back to [`aster.wm.default_theme`](lua/aster/wm.lua). Copy
+[`themes/nord.lua`](themes/nord.lua) as a starting point, drop your version in as
+`themes/<name>.lua`, and point `config/wm.lua` at it: `wm.theme = require("themes.<name>")`.
+`config/wm.lua` can also override drawing functions like `draw_frame` — that part isn't a
+theme file's job, it's `config/wm.lua`'s.
 
-`config/wm.lua` is code and it runs with your full permissions. That's the point, and it's
-also why you should read one before you run it.
+`themes/*.lua` and `config/wm.lua` are code and they run with your full permissions. That's
+the point, and it's also why you should read one before you run it.
 
 ## Adding an app
 
@@ -65,9 +68,11 @@ return {
 }
 ```
 
-Nothing in `lua/aster/` knows the name of any app, including the ones we ship. The editor,
-the file browser and the REPL live in `apps/` and get loaded by `config/wm.lua` exactly the
-way yours will.
+Nothing in `lua/aster/` knows the name of any app, including the ones we ship. The editor
+lives in `apps/` and gets loaded by `config/wm.lua` exactly the way yours will. A bar widget
+(`widgets/`) is a different, smaller contract — `draw(bar, surface, x, y, h) -> width`,
+registered into `wm.bar` instead of opened as a window — see
+[`widgets/clock-widget.lua`](widgets/clock-widget.lua).
 
 Start from [`apps/hello-window.lua`](apps/hello-window.lua). If your app needs something the
 host contract doesn't expose yet, that's a host contract discussion (see below), not a

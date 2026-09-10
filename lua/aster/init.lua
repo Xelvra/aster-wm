@@ -9,6 +9,8 @@ package.loaded["aster"] = M
 M.render = require("aster.render")
 M.wm = require("aster.wm")
 M.input = require("aster.input")
+M.bar = require("aster.bar")
+M.launcher = require("aster.launcher")
 
 local loop = require("aster.loop")
 M.boot = loop.boot
@@ -39,9 +41,11 @@ end
 
 -- The config that ships when ~/.config/aster/wm.lua doesn't exist yet, or
 -- can't be recovered from. Never leaves the user at a blank screen.
+-- No explicit `wm.theme` here: adopt({}) already resets it to
+-- aster.wm.default_theme (D4), the same colors this used to spell out
+-- literally.
 local function builtin_default()
   local wm = M.wm.adopt {}
-  wm.theme = { background = 0x1e2327, accent = 0xff5544, inactive = 0x3b4248, text = 0xd8dee9 }
   wm:bind("super+q", function() wm:close(M.state.windows[M.state.focus]) end)
   if not next(M.state.windows) then
     wm:open { app = fallback_screen(wm.theme), title = "aster" }

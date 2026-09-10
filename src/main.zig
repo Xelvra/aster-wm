@@ -51,15 +51,34 @@ pub fn main(init: std.process.Init) !void {
         fs.log(msg);
     };
 
+    // Target spacing between frames that actually redrew ("running", not
+    // "idle") — an app whose `tick` returns true every frame (an animation)
+    // would otherwise spin main.zig's loop as fast as the CPU allows, with
+    // nothing between one state.frame() and the next. See B34 in
+    // spec/troubleshooting.md.
+    const target_frame_ms: i64 = 1000 / 60;
+
     var buf: [16]u8 = undefined;
     while (true) {
+        const frame_start = fs.nowMs();
         const status = try state.frame(&buf);
         if (std.mem.eql(u8, status, "quit")) break;
-        // "idle": nothing changed, so block instead of spinning (see B6 in
-        // spec/troubleshooting.md and ADR-002). The ~1000ms timeout matches
-        // host-contract.md's "or for about a second, so the clock keeps
-        // ticking" so a time-based Lua widget (e.g. a clock) still updates
-        // even with no input.
-        if (std.mem.eql(u8, status, "idle")) sdl.idleWait(1000);
+        if (std.mem.eql(u8, status, "idle")) {
+            // Nothing changed, so block instead of spinning (see B6 in
+            // spec/troubleshooting.md and ADR-002). The ~1000ms timeout
+            // matches host-contract.md's "or for about a second, so the
+            // clock keeps ticking" so a time-based Lua widget (e.g. a
+            // clock) still updates even with no input.
+            sdl.idleWait(1000);
+            continue;
+        }
+        // "running": pace to ~60fps. idleWait wakes up early the moment an
+        // event arrives (it's built on SDL_WaitEventTimeout), so this never
+        // adds input latency — it only fills the time a frame would
+        // otherwise have spent spinning with nothing to draw.
+        const elapsed_ms = fs.nowMs() - frame_start;
+        if (elapsed_ms < target_frame_ms) {
+            sdl.idleWait(@intCast(target_frame_ms - elapsed_ms));
+        }
     }
 }

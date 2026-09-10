@@ -115,7 +115,7 @@ export fn aster_push_quit() void {
 // only maps spec/conformance/*.lua into the aster-wasm-conformance build
 // (its `embedded_conformance`), so in the release aster-wasm binary these
 // names resolve to nothing and must never be analyzed. As with
-// backends/wasm/modules.zig, the strings are those module names, not paths
+// host/modules.zig, the strings are those module names, not paths
 // relative to this file.
 
 const ConformanceScript = struct { name: [:0]const u8, source: [:0]const u8 };

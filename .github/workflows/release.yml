@@ -1,0 +1,134 @@
+name: Release
+
+# M6 scope decision: Linux only for now (x86_64, and aarch64 if it builds
+# cleanly on GitHub's hosted arm64 runner) — macOS and Windows are an issue
+# for someone with that machine, not something this workflow fakes.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Manual check this workflow can't automate: tools/conformance.sh exits 0
+# when `node` isn't on PATH (it treats "nothing to run" as "nothing
+# failed"), so the wasm half of the host contract is never actually
+# re-verified here. Confirm `zig build test`'s wasm-conformance output was
+# a real pass, not a silent no-op, before tagging.
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      SDL_VERSION: "3.4.16"
+      LIBRARY_PATH: /usr/local/lib
+      CPATH: /usr/local/include
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same "installed by hand" reasoning as ci.yml: pins the exact
+      # toolchain build.zig requires, no dependency on a third-party
+      # action's own PATH/post-job behavior.
+      - name: Install Zig
+        run: |
+          ZIG_VERSION=$(cat .zig-version)
+          ZIG_ARCH="$(uname -m)"
+          curl -fsSL -o zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz"
+          sudo tar -C /usr/local -xJf zig.tar.xz
+          sudo ln -sf "/usr/local/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
+
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev \
+            libxtst-dev libgl1-mesa-dev libdrm-dev libgbm-dev libudev-dev \
+            libdbus-1-dev libpipewire-0.3-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libibus-1.0-dev
+
+      # -DSDL_STATIC=ON here, unlike ci.yml's OFF: a release binary must not
+      # depend on the distro's own libSDL3 being installed (or even
+      # existing) on whatever machine downloads it — one file, no
+      # dependency, is the whole pitch.
+      - name: Build and install static SDL3
+        run: |
+          curl -fsSL -o sdl3.tar.gz \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
+          tar xzf sdl3.tar.gz
+          cmake -S "SDL3-${SDL_VERSION}" -B sdl3-build -DCMAKE_BUILD_TYPE=Release -DSDL_STATIC=ON -DSDL_SHARED=OFF
+          cmake --build sdl3-build -j"$(nproc)"
+          sudo cmake --install sdl3-build
+
+      - name: Refresh linker cache
+        run: sudo ldconfig
+
+      - name: zig build -Doptimize=ReleaseFast
+        run: zig build -Doptimize=ReleaseFast
+
+      # ADR-015 closed the exact bug this guards against: a release binary
+      # that only runs from inside its own checkout isn't done. Same
+      # script `zig build test` already runs locally, on every push — the
+      # release workflow is not exempt from the one check that matters
+      # most for a release binary specifically.
+      - name: Verify the built binary boots from a scratch directory
+        run: tools/boot-from-elsewhere.sh zig-out/bin/aster
+
+      - name: Package
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          NAME="aster-${VERSION}-linux-${{ matrix.arch }}"
+          mkdir "$NAME"
+          cp zig-out/bin/aster "$NAME/"
+          cp README.md LICENSE THIRD-PARTY-NOTICES.md "$NAME/"
+          tar czf "${NAME}.tar.gz" "$NAME"
+          echo "archive=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      # A second, independent check: the exact archive a downloader would
+      # get, unpacked fresh and run the same way tools/boot-from-elsewhere.sh
+      # already checked the raw binary — catches a packaging mistake (wrong
+      # permissions, a missing file) the step above can't see.
+      - name: Verify the packaged archive
+        run: |
+          EXTRACT_DIR=$(mktemp -d)
+          tar xzf "${{ steps.package.outputs.archive }}" -C "$EXTRACT_DIR"
+          BIN=$(find "$EXTRACT_DIR" -name aster -type f)
+          chmod +x "$BIN"
+          tools/boot-from-elsewhere.sh "$BIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive }}
+          path: ${{ steps.package.outputs.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # `gh`, not a third-party release action — same "installed by hand,
+      # no extra dependency" preference ci.yml already follows for Zig.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/*.tar.gz \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

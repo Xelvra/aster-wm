@@ -69,4 +69,12 @@ local elapsed = host.now_ms() - before
 assert(timed_out == nil, "an empty queue must still return nil after the timeout elapses")
 assert(elapsed >= 25, "host.wait(50) returned almost immediately (" .. elapsed .. "ms) — it must actually block")
 
+-- host.wait is reachable from arbitrary app Lua like any other host.*
+-- function (spec/code-style.md), so an out-of-range timeout must become a
+-- catchable Lua error, never a Zig panic that takes the process down — see
+-- B31 in spec/troubleshooting.md.
+local wait_ok, wait_err = pcall(function() return host.wait(2 ^ 40) end)
+assert(not wait_ok, "host.wait with an out-of-i32-range timeout must error, not succeed")
+assert(tostring(wait_err):find("32%-bit"), "error must explain the out-of-range value, got: " .. tostring(wait_err))
+
 print("04_events: PASS")

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Aster — a desktop environment in Lua</title>
+<title>Aster: a desktop environment in Lua</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html, body {
@@ -28,21 +28,25 @@
   p { max-width: 700px; text-align: center; margin: 0 8px; }
   a { color: #ff5544; }
   #status { font-size: 12px; color: #8b939b; }
+  #reset { color: #8b939b; cursor: pointer; text-decoration: underline; }
+  #reset:hover { color: #d8dee9; }
 </style>
 </head>
 <body>
   <canvas id="aster-canvas" width="1024" height="768"></canvas>
   <p>
-    <strong>Aster</strong> — a desktop environment written in Lua, running here compiled to
-    WebAssembly, same code as every other backend. No <code>wm.lua</code> is configured yet in
-    this browser, so you're looking at the built-in fallback screen — there's no editor app
-    yet to write one from inside the demo itself.
+    <strong>Aster</strong>: a desktop environment in Lua, running as WebAssembly.
+    <code>Super+Z</code> opens the editor, <code>Ctrl+S</code> applies your edit live.
     <a href="https://github.com/Xelvra/aster-wm">Source</a>.
   </p>
-  <p id="status">loading…</p>
+  <p><span id="status">loading…</span> (<span id="reset" title="Clears saved windows and wm.lua, back to the default.">reset</span>)</p>
 
   <script src="glue.js"></script>
   <script>
+    document.getElementById("reset").addEventListener("click", () => {
+      localStorage.clear();
+      location.reload();
+    });
     (async () => {
       const status = document.getElementById("status");
       const canvas = document.getElementById("aster-canvas");

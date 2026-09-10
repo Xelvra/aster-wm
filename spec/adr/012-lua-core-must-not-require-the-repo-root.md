@@ -1,6 +1,6 @@
 # ADR-012 — the Lua core must not require running from the repo root
 
-**Status:** accepted (records a known gap; does not close it)
+**Status:** superseded by ADR-015 (chose option 1: `@embedFile` the Lua core, on every backend)
 
 ## Context
 

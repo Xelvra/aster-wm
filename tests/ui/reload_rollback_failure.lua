@@ -38,7 +38,8 @@ assert(bubble.line2 == nil, "the rollback-failure bubble has no previous config 
 -- actually BE the built-in default (background/accent/super+q), not
 -- whatever the once-good config happened to leave behind (it never set a
 -- theme at all, so this only holds if builtin_default() really ran).
-assert(aster.state.wm.theme.background == 0x1e2327,
+local aster_wm = require("aster.wm")
+assert(aster.state.wm.theme.background == aster_wm.default_theme.background,
   "rollback failure must actually apply the built-in theme, not just claim to")
 assert(aster.state.wm.keybindings["super+q"] ~= nil,
   "rollback failure must actually rebind the built-in super+q, not just claim to")
